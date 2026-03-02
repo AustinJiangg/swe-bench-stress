@@ -66,7 +66,7 @@ class DatasetDownloader:
     def stream_tasks(self, n_samples: int = 0) -> Iterator[dict]:
         """Stream task instances from SWE-rebench."""
         logger.info("Streaming tasks from %s (n=%s)", self.TASKS_DATASET, n_samples or "all")
-        yield from self._load_dataset(self.TASKS_DATASET, streaming=True, n_samples=n_samples)
+        yield from self._load_dataset(self.TASKS_DATASET, streaming=True, n_samples=n_samples, split="test")
 
     def download_tasks(self, n_samples: int = 0) -> list[dict]:
         """Download and cache task instances as a JSON file."""
@@ -115,7 +115,7 @@ class DatasetDownloader:
             n_samples or "all",
         )
         yield from self._load_dataset(
-            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples, split="test"
+            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples
         )
 
     def download_trajectories(self, n_samples: int = 0) -> list[dict]:

@@ -75,9 +75,18 @@ N_TRAJECTORIES=100                   # 下载轨迹数（0 = 全部）
 ### 3. 下载数据集
 
 ```bash
+# 从 HuggingFace 远程下载
 uv run python main.py download-data
 # 指定采样量
 uv run python main.py download-data --n-tasks 500 --n-trajectories 200
+
+# 从本地目录加载（跳过网络，适合已在服务器上准备好原始数据集的场景）
+uv run python main.py download-data \
+  --local-tasks /data/SWE-rebench \
+  --local-trajectories /data/SWE-rebench-openhands-trajectories
+
+# 混用：tasks 本地、trajectories 远程
+uv run python main.py download-data --local-tasks /data/SWE-rebench
 ```
 
 数据缓存到 `./data/tasks.json` 和 `./data/trajectories.json`，再次运行直接复用。
@@ -146,6 +155,7 @@ uv run python main.py show-report ./results/report_20240101_120000.json
 | 功能 | 说明 |
 |------|------|
 | 流式下载 | 使用 HuggingFace `streaming=True`，不需要把整个数据集载入内存 |
+| 本地加载 | 通过 `--local-tasks` / `--local-trajectories` 指定本地数据集目录，跳过 HuggingFace 网络请求 |
 | 本地缓存 | 首次下载后保存为 JSON，后续运行直接读取 |
 | `install_config` 清洗 | HF 会把缺失字段填为 `None`，自动移除这些无效键 |
 | 任务与轨迹关联 | 通过 `instance_id` 将轨迹与任务的 `install_config` 关联 |
@@ -195,9 +205,11 @@ uv run python main.py show-report ./results/report_20240101_120000.json
 
 ```
 uv run python main.py download-data
-  --n-tasks INT          下载任务数（默认读 N_TASKS 配置）
-  --n-trajectories INT   下载轨迹数（默认读 N_TRAJECTORIES 配置）
-  --data-dir PATH        数据目录
+  --n-tasks INT                下载任务数（默认读 N_TASKS 配置）
+  --n-trajectories INT         下载轨迹数（默认读 N_TRAJECTORIES 配置）
+  --data-dir PATH              数据目录
+  --local-tasks PATH           本地 SWE-rebench 目录（跳过 HuggingFace）
+  --local-trajectories PATH    本地 trajectories 目录（跳过 HuggingFace）
 
 uv run python main.py build-templates
   --n-tasks INT          处理任务数

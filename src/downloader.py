@@ -48,10 +48,10 @@ class DatasetDownloader:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.hf_token = hf_token or None
 
-    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0):
+    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0, split: str = "train"):
         kwargs = dict(
             path=name,
-            split="train",
+            split=split,
             streaming=streaming,
         )
         if self.hf_token:
@@ -115,7 +115,7 @@ class DatasetDownloader:
             n_samples or "all",
         )
         yield from self._load_dataset(
-            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples
+            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples, split="test"
         )
 
     def download_trajectories(self, n_samples: int = 0) -> list[dict]:

@@ -8,6 +8,26 @@ Datasets:
 
 from __future__ import annotations
 
+import os
+import ssl
+import httpx
+
+os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+# monkey-patch httpx Client，强制 verify=False
+_original_init = httpx.Client.__init__
+def _patched_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_init(self, *args, **kwargs)
+httpx.Client.__init__ = _patched_init
+
+_original_async_init = httpx.AsyncClient.__init__
+def _patched_async_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_async_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = _patched_async_init
+
 import json
 import logging
 from pathlib import Path
@@ -23,20 +43,27 @@ class DatasetDownloader:
     TASKS_DATASET = "nebius/SWE-rebench"
     TRAJECTORIES_DATASET = "nebius/SWE-rebench-openhands-trajectories"
 
-    def __init__(self, data_dir: str = "./data", hf_token: str = ""):
+    def __init__(
+        self,
+        data_dir: str = "./data",
+        hf_token: str = "",
+        local_tasks_dir: str = "",
+        local_trajs_dir: str = "",
+    ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.hf_token = hf_token or None
+        self.local_tasks_dir = local_tasks_dir or None
+        self.local_trajs_dir = local_trajs_dir or None
 
-    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0):
-        kwargs = dict(
-            path=name,
-            split="train",
-            streaming=streaming,
-            trust_remote_code=True,
-        )
-        if self.hf_token:
-            kwargs["token"] = self.hf_token
+    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0, split: str = "train", local_path: str = ""):
+        if local_path:
+            logger.info("Loading from local path: %s (split=%s)", local_path, split)
+            kwargs = dict(path=local_path, split=split, streaming=streaming)
+        else:
+            kwargs = dict(path=name, split=split, streaming=streaming)
+            if self.hf_token:
+                kwargs["token"] = self.hf_token
         ds = load_dataset(**kwargs)
         if n_samples > 0:
             ds = ds.take(n_samples)
@@ -47,7 +74,10 @@ class DatasetDownloader:
     def stream_tasks(self, n_samples: int = 0) -> Iterator[dict]:
         """Stream task instances from SWE-rebench."""
         logger.info("Streaming tasks from %s (n=%s)", self.TASKS_DATASET, n_samples or "all")
-        yield from self._load_dataset(self.TASKS_DATASET, streaming=True, n_samples=n_samples)
+        yield from self._load_dataset(
+            self.TASKS_DATASET, streaming=True, n_samples=n_samples, split="test",
+            local_path=self.local_tasks_dir or "",
+        )
 
     def download_tasks(self, n_samples: int = 0) -> list[dict]:
         """Download and cache task instances as a JSON file."""
@@ -96,7 +126,8 @@ class DatasetDownloader:
             n_samples or "all",
         )
         yield from self._load_dataset(
-            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples
+            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples,
+            local_path=self.local_trajs_dir or "",
         )
 
     def download_trajectories(self, n_samples: int = 0) -> list[dict]:

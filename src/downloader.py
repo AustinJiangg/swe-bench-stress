@@ -13,6 +13,7 @@ import ssl
 import httpx
 
 os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 # monkey-patch httpx Client，强制 verify=False
 _original_init = httpx.Client.__init__

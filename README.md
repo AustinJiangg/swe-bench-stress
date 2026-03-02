@@ -33,9 +33,23 @@ swe-bench-stress/
 
 ### 1. 安装依赖
 
+需要 [uv](https://docs.astral.sh/uv/)（`pip install uv` 或 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+
+`uv sync` 会自动创建 `.venv` 并按 `uv.lock` 精确安装所有依赖。
+
+> 运行命令时用 `uv run` 前缀，无需手动激活虚拟环境：
+> ```bash
+> uv run python main.py --help
+> ```
+> 也可以先激活再运行：
+> ```bash
+> source .venv/bin/activate
+> python main.py --help
+> ```
 
 ### 2. 配置环境变量
 
@@ -61,9 +75,9 @@ N_TRAJECTORIES=100                   # 下载轨迹数（0 = 全部）
 ### 3. 下载数据集
 
 ```bash
-python main.py download-data
+uv run python main.py download-data
 # 指定采样量
-python main.py download-data --n-tasks 500 --n-trajectories 200
+uv run python main.py download-data --n-tasks 500 --n-trajectories 200
 ```
 
 数据缓存到 `./data/tasks.json` 和 `./data/trajectories.json`，再次运行直接复用。
@@ -74,13 +88,13 @@ python main.py download-data --n-tasks 500 --n-trajectories 200
 
 ```bash
 # 通过 E2B HTTP API 构建（默认）
-python main.py build-templates --n-tasks 100 --strategy api
+uv run python main.py build-templates --n-tasks 100 --strategy api
 
 # 通过 e2b CLI 工具构建
-python main.py build-templates --strategy cli
+uv run python main.py build-templates --strategy cli
 
 # 仅导出 Dockerfile，不实际构建（调试）
-python main.py build-templates --export-dockerfiles
+uv run python main.py build-templates --export-dockerfiles
 ```
 
 Template ID 缓存在 `./data/template_cache.json`，相同 `install_config` 只构建一次。
@@ -89,16 +103,16 @@ Template ID 缓存在 `./data/template_cache.json`，相同 `install_config` 只
 
 ```bash
 # 基础压测：20 路并发，回放 50 条轨迹
-python main.py run-stress-test --n-traj 50 --concurrency 20
+uv run python main.py run-stress-test --n-traj 50 --concurrency 20
 
 # 指定 template，并发 50，错峰启动（每 0.1s 启动一个沙箱）
-python main.py run-stress-test \
+uv run python main.py run-stress-test \
   --n-traj 100 --concurrency 50 \
   --template-id <your-template-id> \
   --ramp-delay 0.1
 
 # 回放所有操作类型（默认只回放 bash 命令）
-python main.py run-stress-test --n-traj 50 --all-ops
+uv run python main.py run-stress-test --n-traj 50 --all-ops
 ```
 
 报告自动保存到 `./results/report_<timestamp>.json`。
@@ -106,7 +120,7 @@ python main.py run-stress-test --n-traj 50 --all-ops
 ### 6. 查看报告
 
 ```bash
-python main.py show-report ./results/report_20240101_120000.json
+uv run python main.py show-report ./results/report_20240101_120000.json
 ```
 
 输出示例：
@@ -180,18 +194,18 @@ python main.py show-report ./results/report_20240101_120000.json
 ## CLI 参数速查
 
 ```
-python main.py download-data
+uv run python main.py download-data
   --n-tasks INT          下载任务数（默认读 N_TASKS 配置）
   --n-trajectories INT   下载轨迹数（默认读 N_TRAJECTORIES 配置）
   --data-dir PATH        数据目录
 
-python main.py build-templates
+uv run python main.py build-templates
   --n-tasks INT          处理任务数
   --strategy [api|cli]   构建策略（默认 api）
   --export-dockerfiles   仅导出 Dockerfile，不构建
   --data-dir PATH
 
-python main.py run-stress-test
+uv run python main.py run-stress-test
   --n-traj INT           轨迹数量
   --concurrency INT      最大并发沙箱数
   --template-id STR      覆盖所有沙箱的 template ID
@@ -200,7 +214,26 @@ python main.py run-stress-test
   --data-dir PATH
   --results-dir PATH
 
-python main.py show-report REPORT_PATH
+uv run python main.py show-report REPORT_PATH
+```
+
+## 常用 uv 命令
+
+```bash
+# 添加新依赖
+uv add <package>
+
+# 移除依赖
+uv remove <package>
+
+# 更新所有依赖到最新兼容版本
+uv lock --upgrade
+
+# 查看依赖树
+uv tree
+
+# 在虚拟环境中运行任意命令
+uv run <command>
 ```
 
 ## 数据集说明

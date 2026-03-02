@@ -8,6 +8,25 @@ Datasets:
 
 from __future__ import annotations
 
+import os
+import ssl
+import httpx
+
+os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
+
+# monkey-patch httpx Client，强制 verify=False
+_original_init = httpx.Client.__init__
+def _patched_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_init(self, *args, **kwargs)
+httpx.Client.__init__ = _patched_init
+
+_original_async_init = httpx.AsyncClient.__init__
+def _patched_async_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_async_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = _patched_async_init
+
 import json
 import logging
 from pathlib import Path
@@ -33,7 +52,6 @@ class DatasetDownloader:
             path=name,
             split="train",
             streaming=streaming,
-            trust_remote_code=True,
         )
         if self.hf_token:
             kwargs["token"] = self.hf_token

@@ -43,19 +43,27 @@ class DatasetDownloader:
     TASKS_DATASET = "nebius/SWE-rebench"
     TRAJECTORIES_DATASET = "nebius/SWE-rebench-openhands-trajectories"
 
-    def __init__(self, data_dir: str = "./data", hf_token: str = ""):
+    def __init__(
+        self,
+        data_dir: str = "./data",
+        hf_token: str = "",
+        local_tasks_dir: str = "",
+        local_trajs_dir: str = "",
+    ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.hf_token = hf_token or None
+        self.local_tasks_dir = local_tasks_dir or None
+        self.local_trajs_dir = local_trajs_dir or None
 
-    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0, split: str = "train"):
-        kwargs = dict(
-            path=name,
-            split=split,
-            streaming=streaming,
-        )
-        if self.hf_token:
-            kwargs["token"] = self.hf_token
+    def _load_dataset(self, name: str, streaming: bool = True, n_samples: int = 0, split: str = "train", local_path: str = ""):
+        if local_path:
+            logger.info("Loading from local path: %s (split=%s)", local_path, split)
+            kwargs = dict(path=local_path, split=split, streaming=streaming)
+        else:
+            kwargs = dict(path=name, split=split, streaming=streaming)
+            if self.hf_token:
+                kwargs["token"] = self.hf_token
         ds = load_dataset(**kwargs)
         if n_samples > 0:
             ds = ds.take(n_samples)
@@ -66,7 +74,10 @@ class DatasetDownloader:
     def stream_tasks(self, n_samples: int = 0) -> Iterator[dict]:
         """Stream task instances from SWE-rebench."""
         logger.info("Streaming tasks from %s (n=%s)", self.TASKS_DATASET, n_samples or "all")
-        yield from self._load_dataset(self.TASKS_DATASET, streaming=True, n_samples=n_samples, split="test")
+        yield from self._load_dataset(
+            self.TASKS_DATASET, streaming=True, n_samples=n_samples, split="test",
+            local_path=self.local_tasks_dir or "",
+        )
 
     def download_tasks(self, n_samples: int = 0) -> list[dict]:
         """Download and cache task instances as a JSON file."""
@@ -115,7 +126,8 @@ class DatasetDownloader:
             n_samples or "all",
         )
         yield from self._load_dataset(
-            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples
+            self.TRAJECTORIES_DATASET, streaming=True, n_samples=n_samples,
+            local_path=self.local_trajs_dir or "",
         )
 
     def download_trajectories(self, n_samples: int = 0) -> list[dict]:

@@ -122,7 +122,7 @@ def download_data(n_tasks: int, n_trajectories: int, data_dir: str | None,
 @cli.command("build-templates")
 @click.option("--n-tasks", default=0, show_default=True,
               help="Number of tasks to process (0 = all cached tasks).")
-@click.option("--strategy", default="api", type=click.Choice(["api", "cli"]),
+@click.option("--strategy", default="sdk", type=click.Choice(["sdk", "cli"]),
               show_default=True, help="Template build strategy.")
 @click.option("--export-dockerfiles", is_flag=True,
               help="Export Dockerfiles to ./dockerfiles/ without building.")

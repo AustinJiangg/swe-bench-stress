@@ -159,14 +159,17 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
     )
     for fp, g in groups.items():
         console.print(
-            f"  {fp}  python={g['python'] or '?':6s}  tasks={len(g['tasks'])}"
+            f"  {fp}  python={g['python'] or '?':6s}  "
+            f"repo={g['repo'] or '(none)':30s}  "
+            f"commit={g['base_commit'][:8] if g['base_commit'] else '?':8s}  "
+            f"tasks={len(g['tasks'])}"
         )
 
     if export_dockerfiles:
         df_dir = Path("./dockerfiles")
         df_dir.mkdir(exist_ok=True)
         for fp, g in groups.items():
-            df = generate_dockerfile(g["config"], cfg.e2b_base_image)
+            df = generate_dockerfile(g["config"], cfg.e2b_base_image, g["repo"], g["base_commit"])
             (df_dir / f"{fp}.Dockerfile").write_text(df)
         console.print(f"[green]✓[/] Exported {len(groups)} unique Dockerfiles to ./dockerfiles/")
         return

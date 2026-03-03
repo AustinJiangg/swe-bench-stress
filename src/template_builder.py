@@ -314,11 +314,11 @@ class E2BTemplateBuilder:
                 "template",
                 "build",
                 "--name", template_name,
-                "--dockerfile", str(df_path),
+                "--dockerfile", "e2b.Dockerfile",
                 "--cpu-count", str(self.cpu_count),
                 "--memory-mb", str(self.memory_mb),
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=tmpdir, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"e2b template build failed:\n{result.stdout}\n{result.stderr}"

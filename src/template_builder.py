@@ -80,7 +80,6 @@ def generate_dockerfile(
         f"FROM {base_image}",
         "",
         "ENV DEBIAN_FRONTEND=noninteractive",
-        'SHELL ["/bin/bash", "-c"]',
         "",
     ]
 
@@ -91,6 +90,19 @@ def generate_dockerfile(
                 lines.append(f"ENV {k}={v}")
         if env_vars:
             lines.append("")
+
+    # ARM apt mirror (TUNA ubuntu-ports)
+    lines += [
+        "RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak && \\",
+        "    printf '%s\\n' \\",
+        "    '# Ubuntu 22.04 LTS (jammy) - ARM ports mirror (TUNA, HTTP)' \\",
+        "    'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy main restricted universe multiverse' \\",
+        "    'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy-updates main restricted universe multiverse' \\",
+        "    'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy-security main restricted universe multiverse' \\",
+        "    'deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy-backports main restricted universe multiverse' \\",
+        "    > /etc/apt/sources.list",
+        "",
+    ]
 
     # System tools
     lines += [

@@ -158,6 +158,27 @@ class TemplateCache:
         self._save()
 
 
+def group_tasks_by_config(tasks: list[dict]) -> dict[str, dict]:
+    """Group tasks by install_config fingerprint.
+
+    Returns::
+
+        {fingerprint: {"config": {…}, "tasks": [instance_id, …], "python": "3.x"}}
+    """
+    groups: dict[str, dict] = {}
+    for task in tasks:
+        ic = task.get("install_config") or {}
+        fp = fingerprint_install_config(ic)
+        if fp not in groups:
+            groups[fp] = {
+                "config": ic,
+                "tasks": [],
+                "python": str(ic.get("python", "")),
+            }
+        groups[fp]["tasks"].append(task.get("instance_id", "unknown"))
+    return groups
+
+
 class E2BTemplateBuilder:
     """Build and register E2B templates from install_config dicts."""
 
@@ -196,25 +217,21 @@ class E2BTemplateBuilder:
         return template_id
 
     def get_or_build_batch(self, tasks: list[dict], name_prefix: str = "swe") -> dict[str, str]:
+        groups = group_tasks_by_config(tasks)
+        logger.info(
+            "Grouped %d tasks into %d unique install_configs",
+            len(tasks), len(groups),
+        )
+
         result: dict[str, str] = {}
-        seen_fps: dict[str, str] = {}
-
-        for task in tasks:
-            iid = task.get("instance_id", "unknown")
-            ic = task.get("install_config") or {}
-            fp = fingerprint_install_config(ic)
-
-            if fp in seen_fps:
-                result[iid] = seen_fps[fp]
-                continue
-
+        for fp, group in groups.items():
             try:
-                tid = self.get_or_build(ic, name_prefix)
-                seen_fps[fp] = tid
-                result[iid] = tid
+                tid = self.get_or_build(group["config"], name_prefix)
             except Exception as exc:
-                logger.warning("Failed to build template for %s: %s", iid, exc)
-                result[iid] = ""
+                logger.warning("Failed to build template for %s: %s", fp, exc)
+                tid = ""
+            for iid in group["tasks"]:
+                result[iid] = tid
 
         return result
 

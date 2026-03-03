@@ -130,7 +130,11 @@ def download_data(n_tasks: int, n_trajectories: int, data_dir: str | None,
 def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_dir: str | None):
     """Build E2B templates from task install_configs."""
     from config import Config
-    from src.template_builder import E2BTemplateBuilder, generate_dockerfile
+    from src.template_builder import (
+        E2BTemplateBuilder,
+        generate_dockerfile,
+        group_tasks_by_config,
+    )
 
     cfg = Config()
     data_dir = data_dir or cfg.data_dir
@@ -146,22 +150,25 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
     if n_tasks > 0:
         tasks = tasks[:n_tasks]
 
-    console.print(f"Processing {len(tasks)} tasks with strategy=[bold]{strategy}[/]")
+    # ---- group by install_config
+    groups = group_tasks_by_config(tasks)
+    console.print(
+        f"Processing {len(tasks)} tasks → "
+        f"[bold]{len(groups)}[/] unique install_configs, "
+        f"strategy=[bold]{strategy}[/]"
+    )
+    for fp, g in groups.items():
+        console.print(
+            f"  {fp}  python={g['python'] or '?':6s}  tasks={len(g['tasks'])}"
+        )
 
     if export_dockerfiles:
         df_dir = Path("./dockerfiles")
         df_dir.mkdir(exist_ok=True)
-        seen: set[str] = set()
-        for task in tasks:
-            ic = task.get("install_config") or {}
-            import hashlib, json as _json
-            fp = hashlib.sha256(_json.dumps(ic, sort_keys=True, default=str).encode()).hexdigest()[:16]
-            if fp in seen:
-                continue
-            seen.add(fp)
-            df = generate_dockerfile(ic, cfg.e2b_base_image)
+        for fp, g in groups.items():
+            df = generate_dockerfile(g["config"], cfg.e2b_base_image)
             (df_dir / f"{fp}.Dockerfile").write_text(df)
-        console.print(f"[green]✓[/] Exported {len(seen)} unique Dockerfiles to ./dockerfiles/")
+        console.print(f"[green]✓[/] Exported {len(groups)} unique Dockerfiles to ./dockerfiles/")
         return
 
     builder = E2BTemplateBuilder(
@@ -175,7 +182,7 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
     mapping = builder.get_or_build_batch(tasks, name_prefix="swe")
 
     built = sum(1 for v in mapping.values() if v)
-    console.print(f"[green]✓[/] Templates ready: {built}/{len(tasks)}")
+    console.print(f"[green]✓[/] Templates ready: {built}/{len(tasks)} ({len(groups)} unique images)")
 
     # Save mapping
     mapping_path = Path(data_dir) / "template_mapping.json"

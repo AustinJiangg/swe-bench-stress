@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -169,16 +168,12 @@ class E2BTemplateBuilder:
         strategy: str = "sdk",  # "cli" | "sdk"
         cpu_count: int = 1,
         memory_mb: int = 1024,
-        docker_registry_username: str = "",
-        docker_registry_password: str = "",
     ):
         self.base_image = base_image
         self.cache = TemplateCache(cache_file)
         self.strategy = strategy
         self.cpu_count = cpu_count
         self.memory_mb = memory_mb
-        self.docker_registry_username = docker_registry_username
-        self.docker_registry_password = docker_registry_password
 
     def get_or_build(self, install_config: dict, name_prefix: str = "swe") -> str:
         fp = fingerprint_install_config(install_config)
@@ -236,13 +231,7 @@ class E2BTemplateBuilder:
                 "--dockerfile", str(df_path),
                 "--yes",
             ]
-            env = dict(os.environ)
-            if self.docker_registry_username:
-                env["DOCKER_REGISTRY_USERNAME"] = self.docker_registry_username
-            if self.docker_registry_password:
-                env["DOCKER_REGISTRY_PASSWORD"] = self.docker_registry_password
-
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"e2b template build failed:\n{result.stdout}\n{result.stderr}"
@@ -259,32 +248,13 @@ class E2BTemplateBuilder:
     def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
         template = Template().from_dockerfile(dockerfile)
 
-        prev_user = os.environ.get("DOCKER_REGISTRY_USERNAME")
-        prev_pass = os.environ.get("DOCKER_REGISTRY_PASSWORD")
-        try:
-            if self.docker_registry_username:
-                os.environ["DOCKER_REGISTRY_USERNAME"] = self.docker_registry_username
-            if self.docker_registry_password:
-                os.environ["DOCKER_REGISTRY_PASSWORD"] = self.docker_registry_password
-
-            build_info = Template.build(
-                template,
-                alias=template_name,
-                cpu_count=self.cpu_count,
-                memory_mb=self.memory_mb,
-                on_build_logs=default_build_logger(),
-            )
-        finally:
-            if self.docker_registry_username:
-                if prev_user is None:
-                    os.environ.pop("DOCKER_REGISTRY_USERNAME", None)
-                else:
-                    os.environ["DOCKER_REGISTRY_USERNAME"] = prev_user
-            if self.docker_registry_password:
-                if prev_pass is None:
-                    os.environ.pop("DOCKER_REGISTRY_PASSWORD", None)
-                else:
-                    os.environ["DOCKER_REGISTRY_PASSWORD"] = prev_pass
+        build_info = Template.build(
+            template,
+            alias=template_name,
+            cpu_count=self.cpu_count,
+            memory_mb=self.memory_mb,
+            on_build_logs=default_build_logger(),
+        )
 
         template_id = getattr(build_info, "template_id", "")
         if not template_id:

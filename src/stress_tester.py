@@ -139,7 +139,7 @@ async def _run_trajectory_in_sandbox(
     ops,                    # list[SandboxOp]
     template_id: str,
     api_key: str,
-    domain: str,
+    api_url: str,
     sandbox_timeout: int,
     command_timeout: int,
     bash_only: bool,
@@ -291,7 +291,7 @@ async def _run_trajectory_in_sandbox(
 class StressTestConfig:
     template_id: str                    # default template when not per-task
     api_key: str
-    domain: str
+    api_url: str
     max_concurrent: int = 10
     sandbox_timeout: int = 300
     command_timeout: int = 60
@@ -329,6 +329,8 @@ class StressTester:
                               Falls back to cfg.template_id when missing.
         """
         cfg = self.cfg
+        os.environ.setdefault("E2B_API_KEY", cfg.api_key)
+        os.environ.setdefault("E2B_API_URL", cfg.api_url)
         sem = asyncio.Semaphore(cfg.max_concurrent)
         started_at = _now_iso()
         t_start = time.monotonic()
@@ -344,7 +346,7 @@ class StressTester:
                     ops=pt.ops,
                     template_id=tid,
                     api_key=cfg.api_key,
-                    domain=cfg.domain,
+                    api_url=cfg.api_url,
                     sandbox_timeout=cfg.sandbox_timeout,
                     command_timeout=cfg.command_timeout,
                     bash_only=cfg.bash_only,

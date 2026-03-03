@@ -65,8 +65,6 @@ E2B_API_URL=http://localhost:3000          # 自部署 E2B 地址
 E2B_BASE_IMAGE=61.47.17.182:89/e2b/ubuntu:22.04-custom
 E2B_TEMPLATE_CPU_COUNT=1                   # Template.build(cpu_count)
 E2B_TEMPLATE_MEMORY_MB=1024                # Template.build(memory_mb)
-DOCKER_REGISTRY_USERNAME=                  # 私有镜像仓库用户名（可选）
-DOCKER_REGISTRY_PASSWORD=                  # 私有镜像仓库密码（可选）
 
 MAX_CONCURRENT_SANDBOXES=20          # 最大并发沙箱数
 SANDBOX_TIMEOUT=300                  # 单个沙箱生命周期（秒）
@@ -99,6 +97,12 @@ uv run python main.py download-data --local-tasks /data/SWE-rebench
 
 每个任务的 `install_config` 描述了运行环境（Python 版本、conda/pip 包等），将其转换为 Dockerfile 并在 E2B 注册为 template：
 
+构建前先登录私有镜像仓库：
+
+```bash
+docker login 61.47.17.182:89
+```
+
 ```bash
 # 通过 E2B Python SDK 构建（默认）
 uv run python main.py build-templates --n-tasks 100 --strategy sdk
@@ -116,8 +120,6 @@ Template ID 缓存在 `./data/template_cache.json`，相同 `install_config` 只
 > 不再在代码里显式传入这两个参数。
 > 同时默认使用 `Template.build(..., cpu_count=1, memory_mb=1024, on_build_logs=default_build_logger())`，
 > 可通过 `.env` 的 `E2B_TEMPLATE_CPU_COUNT`、`E2B_TEMPLATE_MEMORY_MB` 覆盖。
-> 若基础镜像来自私有仓库，可在 `.env` 提供 `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD`，
-> E2B 后端会读取这两个环境变量完成认证。
 
 ### 5. 执行压测
 

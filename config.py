@@ -14,8 +14,6 @@ class Config(BaseSettings):
 
     e2b_template_cpu_count: int = Field(default=1, alias="E2B_TEMPLATE_CPU_COUNT")
     e2b_template_memory_mb: int = Field(default=1024, alias="E2B_TEMPLATE_MEMORY_MB")
-    docker_registry_username: str = Field(default="", alias="DOCKER_REGISTRY_USERNAME")
-    docker_registry_password: str = Field(default="", alias="DOCKER_REGISTRY_PASSWORD")
 
     # Stress test settings
     max_concurrent_sandboxes: int = Field(default=10, alias="MAX_CONCURRENT_SANDBOXES")

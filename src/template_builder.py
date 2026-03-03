@@ -19,7 +19,10 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from e2b import Template
+from dotenv import load_dotenv
+from e2b import Template, default_build_logger
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +70,6 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
         "",
     ]
 
-    # -- environment variables
     env_vars = install_config.get("env_vars") or {}
     if isinstance(env_vars, dict):
         for k, v in env_vars.items():
@@ -76,13 +78,11 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
         if env_vars:
             lines.append("")
 
-    # -- pre-install commands (system deps, apt packages, etc.)
     for cmd in _list_val(install_config.get("pre_install")):
         lines.append(f"RUN {cmd}")
     if _list_val(install_config.get("pre_install")):
         lines.append("")
 
-    # -- Python version via conda (base env)
     python_ver = install_config.get("python")
     if python_ver:
         safe_ver = str(python_ver).strip()
@@ -92,7 +92,6 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
             "",
         ]
 
-    # -- conda packages
     packages = (install_config.get("packages") or "").strip()
     if packages:
         lines += [
@@ -101,7 +100,6 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
             "",
         ]
 
-    # -- pip packages
     pip_pkgs = _list_val(install_config.get("pip_packages"))
     if pip_pkgs:
         joined = " ".join(pip_pkgs)
@@ -110,10 +108,8 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
             "",
         ]
 
-    # -- final install (skip editable installs that require source code)
     install_cmd = (install_config.get("install") or "").strip()
     if install_cmd:
-        # editable installs require the actual repo; skip or make conditional
         if any(x in install_cmd for x in ["pip install -e", "python setup.py"]):
             lines += [
                 "# NOTE: editable install deferred to runtime (requires repo source)",
@@ -123,7 +119,6 @@ def generate_dockerfile(install_config: dict, base_image: str) -> str:
         else:
             lines += [f"RUN {install_cmd} || true", ""]
 
-    # -- label for traceability
     test_cmd = install_config.get("test_cmd", "")
     if test_cmd:
         lines.append(f'LABEL swe.test_cmd="{test_cmd}"')
@@ -137,10 +132,6 @@ def fingerprint_install_config(install_config: dict) -> str:
     canonical = json.dumps(install_config, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
-
-# --------------------------------------------------------------------------- #
-#  E2B Template Registry (local cache)                                         #
-# --------------------------------------------------------------------------- #
 
 class TemplateCache:
     """Persist fingerprint → template_id mappings in a JSON file."""
@@ -167,53 +158,29 @@ class TemplateCache:
         self._data[fp] = template_id
         self._save()
 
-    def __len__(self):
-        return len(self._data)
-
-
-# --------------------------------------------------------------------------- #
-#  E2B Template Builder                                                         #
-# --------------------------------------------------------------------------- #
 
 class E2BTemplateBuilder:
-    """
-    Build and register E2B templates from install_config dicts.
-
-    Two build strategies are supported:
-
-    1. **e2b-cli** (default): writes an e2b.Dockerfile to a temp dir and
-       calls `e2b template build` as a subprocess.  Requires the `e2b` CLI
-       tool to be installed and configured with E2B_DOMAIN / E2B_API_KEY.
-
-    2. **sdk**: uses the E2B Python SDK (`Template.build`).
-       This is the recommended programmatic strategy.
-    """
+    """Build and register E2B templates from install_config dicts."""
 
     def __init__(
         self,
-        api_key: str,
-        domain: str,
         base_image: str,
         cache_file: str = "./data/template_cache.json",
         strategy: str = "sdk",  # "cli" | "sdk"
+        cpu_count: int = 1,
+        memory_mb: int = 1024,
+        docker_registry_username: str = "",
+        docker_registry_password: str = "",
     ):
-        self.api_key = api_key
-        self.domain = domain
         self.base_image = base_image
         self.cache = TemplateCache(cache_file)
         self.strategy = strategy
-
-        # Ensure SDK env vars are set for any subprocess calls
-        os.environ.setdefault("E2B_API_KEY", api_key)
-        os.environ.setdefault("E2B_DOMAIN", domain)
-
-    # --------------------------------------------------------- public API
+        self.cpu_count = cpu_count
+        self.memory_mb = memory_mb
+        self.docker_registry_username = docker_registry_username
+        self.docker_registry_password = docker_registry_password
 
     def get_or_build(self, install_config: dict, name_prefix: str = "swe") -> str:
-        """
-        Return a template_id for the given install_config.
-        Builds the template if it is not already cached.
-        """
         fp = fingerprint_install_config(install_config)
         cached = self.cache.get(fp)
         if cached:
@@ -233,15 +200,9 @@ class E2BTemplateBuilder:
         logger.info("Template built: %s -> %s", template_name, template_id)
         return template_id
 
-    def get_or_build_batch(
-        self, tasks: list[dict], name_prefix: str = "swe"
-    ) -> dict[str, str]:
-        """
-        Build templates for a list of tasks.
-        Returns a mapping of instance_id -> template_id.
-        """
+    def get_or_build_batch(self, tasks: list[dict], name_prefix: str = "swe") -> dict[str, str]:
         result: dict[str, str] = {}
-        seen_fps: dict[str, str] = {}  # fingerprint -> template_id
+        seen_fps: dict[str, str] = {}
 
         for task in tasks:
             iid = task.get("instance_id", "unknown")
@@ -262,10 +223,7 @@ class E2BTemplateBuilder:
 
         return result
 
-    # --------------------------------------------------------- CLI strategy
-
     def _build_via_cli(self, dockerfile: str, template_name: str) -> str:
-        """Build a template by shelling out to `e2b template build`."""
         with tempfile.TemporaryDirectory() as tmpdir:
             df_path = Path(tmpdir) / "e2b.Dockerfile"
             df_path.write_text(dockerfile)
@@ -278,15 +236,18 @@ class E2BTemplateBuilder:
                 "--dockerfile", str(df_path),
                 "--yes",
             ]
-            env = {**os.environ, "E2B_API_KEY": self.api_key, "E2B_DOMAIN": self.domain}
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+            env = dict(os.environ)
+            if self.docker_registry_username:
+                env["DOCKER_REGISTRY_USERNAME"] = self.docker_registry_username
+            if self.docker_registry_password:
+                env["DOCKER_REGISTRY_PASSWORD"] = self.docker_registry_password
 
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"e2b template build failed:\n{result.stdout}\n{result.stderr}"
                 )
 
-            # Parse template ID from CLI output (format: "Template ID: <id>")
             for line in result.stdout.splitlines():
                 if "template" in line.lower() and "id" in line.lower():
                     parts = line.split(":")
@@ -295,32 +256,42 @@ class E2BTemplateBuilder:
 
             raise RuntimeError(f"Could not parse template ID from output:\n{result.stdout}")
 
-    # --------------------------------------------------------- SDK strategy
-
     def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
-        """
-        Build a template via the E2B Python SDK.
-
-        The SDK encapsulates backend API details and returns typed build info.
-        """
         template = Template().from_dockerfile(dockerfile)
-        build_info = Template.build(
-            template,
-            alias=template_name,
-            api_key=self.api_key,
-            domain=self.domain,
-        )
+
+        prev_user = os.environ.get("DOCKER_REGISTRY_USERNAME")
+        prev_pass = os.environ.get("DOCKER_REGISTRY_PASSWORD")
+        try:
+            if self.docker_registry_username:
+                os.environ["DOCKER_REGISTRY_USERNAME"] = self.docker_registry_username
+            if self.docker_registry_password:
+                os.environ["DOCKER_REGISTRY_PASSWORD"] = self.docker_registry_password
+
+            build_info = Template.build(
+                template,
+                alias=template_name,
+                cpu_count=self.cpu_count,
+                memory_mb=self.memory_mb,
+                on_build_logs=default_build_logger(),
+            )
+        finally:
+            if self.docker_registry_username:
+                if prev_user is None:
+                    os.environ.pop("DOCKER_REGISTRY_USERNAME", None)
+                else:
+                    os.environ["DOCKER_REGISTRY_USERNAME"] = prev_user
+            if self.docker_registry_password:
+                if prev_pass is None:
+                    os.environ.pop("DOCKER_REGISTRY_PASSWORD", None)
+                else:
+                    os.environ["DOCKER_REGISTRY_PASSWORD"] = prev_pass
+
         template_id = getattr(build_info, "template_id", "")
         if not template_id:
             raise RuntimeError(f"No template_id in SDK response: {build_info}")
         return template_id
 
-    # --------------------------------------------------------- Dockerfile export
-
-    def export_dockerfile(
-        self, install_config: dict, output_path: str
-    ) -> str:
-        """Write a Dockerfile for the given install_config and return its path."""
+    def export_dockerfile(self, install_config: dict, output_path: str) -> str:
         dockerfile = generate_dockerfile(install_config, self.base_image)
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

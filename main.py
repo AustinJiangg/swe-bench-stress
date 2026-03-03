@@ -165,11 +165,13 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
         return
 
     builder = E2BTemplateBuilder(
-        api_key=cfg.e2b_api_key,
-        domain=cfg.e2b_domain,
         base_image=cfg.e2b_base_image,
         cache_file=str(Path(data_dir) / "template_cache.json"),
         strategy=strategy,
+        cpu_count=cfg.e2b_template_cpu_count,
+        memory_mb=cfg.e2b_template_memory_mb,
+        docker_registry_username=cfg.docker_registry_username,
+        docker_registry_password=cfg.docker_registry_password,
     )
 
     mapping = builder.get_or_build_batch(tasks, name_prefix="swe")
@@ -257,10 +259,10 @@ def run_stress_test(
         console.print(f"Loaded template mapping with {len(template_mapping)} entries")
 
     # ---- resolve template ID
-    effective_template = template_id or cfg.e2b_domain  # fallback: use base sandbox
+    effective_template = template_id or cfg.e2b_api_url  # fallback: use base sandbox
     if not template_mapping and not template_id:
         console.print(
-            "[yellow]No template mapping found. Using domain as template ID. "
+            "[yellow]No template mapping found. Using API URL as template ID. "
             "Run `build-templates` for proper isolation.[/]"
         )
 
@@ -268,7 +270,7 @@ def run_stress_test(
     stress_cfg = StressTestConfig(
         template_id=template_id or "base",
         api_key=cfg.e2b_api_key,
-        domain=cfg.e2b_domain,
+        api_url=cfg.e2b_api_url,
         max_concurrent=max_concurrent,
         sandbox_timeout=cfg.sandbox_timeout,
         command_timeout=cfg.command_timeout,
@@ -286,7 +288,7 @@ def run_stress_test(
         f"  Concurrency  : {max_concurrent}\n"
         f"  Bash only    : {not all_ops}\n"
         f"  Ramp delay   : {ramp_delay}s\n"
-        f"  E2B domain   : {cfg.e2b_domain}",
+        f"  E2B API URL  : {cfg.e2b_api_url}",
         title="Config",
         border_style="cyan",
     ))

@@ -96,8 +96,8 @@ uv run python main.py download-data --local-tasks /data/SWE-rebench
 每个任务的 `install_config` 描述了运行环境（Python 版本、conda/pip 包等），将其转换为 Dockerfile 并在 E2B 注册为 template：
 
 ```bash
-# 通过 E2B HTTP API 构建（默认）
-uv run python main.py build-templates --n-tasks 100 --strategy api
+# 通过 E2B Python SDK 构建（默认）
+uv run python main.py build-templates --n-tasks 100 --strategy sdk
 
 # 通过 e2b CLI 工具构建
 uv run python main.py build-templates --strategy cli
@@ -174,7 +174,7 @@ uv run python main.py show-report ./results/report_20240101_120000.json
 | `install` | `RUN <cmd>`（需要源码的跳过，运行时执行） |
 
 支持两种构建策略：
-- **`api`**：直接调用 E2B HTTP API `POST /templates`
+- **`sdk`**：通过 E2B Python SDK（`Template.build`）构建
 - **`cli`**：调用 `e2b template build` 命令行工具
 
 ### `src/trajectory_parser.py`
@@ -213,7 +213,7 @@ uv run python main.py download-data
 
 uv run python main.py build-templates
   --n-tasks INT          处理任务数
-  --strategy [api|cli]   构建策略（默认 api）
+  --strategy [sdk|cli]   构建策略（默认 sdk）
   --export-dockerfiles   仅导出 Dockerfile，不构建
   --data-dir PATH
 

@@ -4,11 +4,8 @@ Build E2B sandbox templates from SWE-rebench install_config.
 Strategy
 --------
 1. Generate a Dockerfile for each unique install_config fingerprint.
-2. Call the E2B API (self-hosted) to build and register the template.
+2. Build and register templates via the E2B Python SDK or E2B CLI.
 3. Cache template IDs locally so rebuilds are skipped.
-
-The E2B template build API is called via the e2b Python SDK's internal
-HTTP client, or – if the SDK version does not expose it – via httpx directly.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-import httpx
+from e2b import Template
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +185,8 @@ class E2BTemplateBuilder:
        calls `e2b template build` as a subprocess.  Requires the `e2b` CLI
        tool to be installed and configured with E2B_DOMAIN / E2B_API_KEY.
 
-    2. **api**: calls the E2B orchestration API directly via httpx.
-       Use this when the CLI is unavailable or for programmatic control.
+    2. **sdk**: uses the E2B Python SDK (`Template.build`).
+       This is the recommended programmatic strategy.
     """
 
     def __init__(
@@ -198,7 +195,7 @@ class E2BTemplateBuilder:
         domain: str,
         base_image: str,
         cache_file: str = "./data/template_cache.json",
-        strategy: str = "api",  # "cli" | "api"
+        strategy: str = "sdk",  # "cli" | "sdk"
     ):
         self.api_key = api_key
         self.domain = domain
@@ -230,7 +227,7 @@ class E2BTemplateBuilder:
         if self.strategy == "cli":
             template_id = self._build_via_cli(dockerfile, template_name)
         else:
-            template_id = self._build_via_api(dockerfile, template_name)
+            template_id = self._build_via_sdk(dockerfile, template_name)
 
         self.cache.set(fp, template_id)
         logger.info("Template built: %s -> %s", template_name, template_id)
@@ -298,50 +295,24 @@ class E2BTemplateBuilder:
 
             raise RuntimeError(f"Could not parse template ID from output:\n{result.stdout}")
 
-    # --------------------------------------------------------- API strategy
+    # --------------------------------------------------------- SDK strategy
 
-    def _build_via_api(self, dockerfile: str, template_name: str) -> str:
+    def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
         """
-        Build a template via the E2B HTTP API.
+        Build a template via the E2B Python SDK.
 
-        POST /templates
-        {
-          "dockerfile": "<dockerfile content>",
-          "name": "<template name>",
-          "startCmd": "/bin/bash"
-        }
+        The SDK encapsulates backend API details and returns typed build info.
         """
-        # E2B self-hosted may run on HTTP internally
-        scheme = "http" if ":" in self.domain else "https"
-        base_url = f"{scheme}://{self.domain}"
-
-        payload = {
-            "dockerfile": dockerfile,
-            "name": template_name,
-            "startCmd": "/bin/bash",
-        }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        with httpx.Client(timeout=300) as client:
-            resp = client.post(f"{base_url}/templates", json=payload, headers=headers)
-            if resp.status_code not in (200, 201, 202):
-                raise RuntimeError(
-                    f"E2B API error {resp.status_code}: {resp.text}"
-                )
-            data = resp.json()
-
-        # The response may contain "templateID", "template_id", or "id"
-        template_id = (
-            data.get("templateID")
-            or data.get("template_id")
-            or data.get("id")
-            or ""
+        template = Template().from_dockerfile(dockerfile)
+        build_info = Template.build(
+            template,
+            alias=template_name,
+            api_key=self.api_key,
+            domain=self.domain,
         )
+        template_id = getattr(build_info, "template_id", "")
         if not template_id:
-            raise RuntimeError(f"No template ID in API response: {data}")
+            raise RuntimeError(f"No template_id in SDK response: {build_info}")
         return template_id
 
     # --------------------------------------------------------- Dockerfile export

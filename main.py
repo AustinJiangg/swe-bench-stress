@@ -73,16 +73,16 @@ def cli(debug: bool):
 # ===========================================================================
 
 @cli.command("download-data")
-@click.option("--n-tasks", default=0, show_default=True,
-              help="Number of task instances to download (0 = all).")
-@click.option("--n-trajectories", default=0, show_default=True,
-              help="Number of trajectories to download (0 = all).")
+@click.option("--n-tasks", default=None, type=int,
+              help="Number of task instances to download (0 = all, default from config).")
+@click.option("--n-trajectories", default=None, type=int,
+              help="Number of trajectories to download (0 = all, default from config).")
 @click.option("--data-dir", default=None, help="Override data directory.")
 @click.option("--local-tasks", default=None, metavar="PATH",
               help="Local directory of SWE-rebench dataset (skip HuggingFace).")
 @click.option("--local-trajectories", default=None, metavar="PATH",
               help="Local directory of SWE-rebench-openhands-trajectories dataset (skip HuggingFace).")
-def download_data(n_tasks: int, n_trajectories: int, data_dir: str | None,
+def download_data(n_tasks: int | None, n_trajectories: int | None, data_dir: str | None,
                   local_tasks: str | None, local_trajectories: str | None):
     """Download SWE-rebench tasks and trajectories from HuggingFace (or local path)."""
     from config import Config
@@ -90,8 +90,10 @@ def download_data(n_tasks: int, n_trajectories: int, data_dir: str | None,
 
     cfg = Config()
     data_dir = data_dir or cfg.data_dir
-    n_tasks = n_tasks or cfg.n_tasks
-    n_trajectories = n_trajectories or cfg.n_trajectories
+    if n_tasks is None:
+        n_tasks = cfg.n_tasks
+    if n_trajectories is None:
+        n_trajectories = cfg.n_trajectories
 
     downloader = DatasetDownloader(
         data_dir=data_dir,

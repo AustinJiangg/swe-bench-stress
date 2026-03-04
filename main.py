@@ -178,9 +178,8 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
                 "environment_setup_commit": g.get("environment_setup_commit", g["base_commit"]),
                 "environment": g.get("environment", ""),
                 "requirements": g.get("requirements", ""),
-                "base_image": cfg.e2b_base_image,
             }
-            df = generate_dockerfile(instance)
+            df = generate_dockerfile(instance, cfg.e2b_base_image)
             (df_dir / f"{fp}.Dockerfile").write_text(df)
         console.print(f"[green]✓[/] Exported {len(groups)} unique Dockerfiles to ./dockerfiles/")
         return

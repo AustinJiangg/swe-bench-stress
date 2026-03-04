@@ -39,6 +39,7 @@ RAW_URL = "https://raw.githubusercontent.com"
 
 def generate_dockerfile(
     instance: dict[str, Any],
+    base_image: str = "sweb.base.py.arm64:latest",
 ) -> str:
     specs = {k: v for k, v in (instance.get("install_config") or {}).items() if v is not None}
     repo = instance["repo"]
@@ -58,7 +59,6 @@ def generate_dockerfile(
     reqs_clean = "\n".join(l for l in reqs.splitlines() if l.strip() and not l.strip().startswith("-e "))
     act = "" if no_use_env else f". /opt/miniconda3/bin/activate {ENV} && "
 
-    base_image = instance.get("base_image", "")
     lines = [f"FROM {base_image}", ""]
 
     for k, v in env_vars.items():
@@ -226,7 +226,6 @@ class E2BTemplateBuilder:
             "environment_setup_commit": group.get("environment_setup_commit", group["base_commit"]),
             "environment": group.get("environment", ""),
             "requirements": group.get("requirements", ""),
-            "base_image": self.base_image,
         }
 
     def get_or_build(self, group: dict, name_prefix: str = "swe") -> str:
@@ -236,7 +235,7 @@ class E2BTemplateBuilder:
             logger.info("Template cache hit: %s -> %s", fp, cached)
             return cached
 
-        dockerfile = generate_dockerfile(self._make_instance(group))
+        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
         template_name = f"{name_prefix}-{fp}"
         logger.info("Building new template: %s", template_name)
 
@@ -313,7 +312,7 @@ class E2BTemplateBuilder:
         return template_id
 
     def export_dockerfile(self, group: dict, output_path: str) -> str:
-        dockerfile = generate_dockerfile(self._make_instance(group))
+        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(dockerfile)

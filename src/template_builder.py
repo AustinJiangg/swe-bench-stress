@@ -306,19 +306,33 @@ class E2BTemplateBuilder:
                 "--memory-mb", str(self.memory_mb),
             ]
             logger.info("Running: %s", " ".join(cmd))
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=tmpdir, timeout=300)
-            if result.returncode != 0:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=tmpdir,
+            )
+            output_lines: list[str] = []
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                output_lines.append(line)
+                print(line, flush=True)
+            returncode = proc.wait()
+            if returncode != 0:
                 raise RuntimeError(
-                    f"e2b template build failed:\n{result.stdout}\n{result.stderr}"
+                    f"e2b template build failed (exit {returncode}):\n"
+                    + "\n".join(output_lines)
                 )
 
-            for line in result.stdout.splitlines():
+            for line in output_lines:
                 if "template" in line.lower() and "id" in line.lower():
                     parts = line.split(":")
                     if len(parts) >= 2:
                         return parts[-1].strip()
 
-            raise RuntimeError(f"Could not parse template ID from output:\n{result.stdout}")
+            raise RuntimeError(
+                f"Could not parse template ID from output:\n"
+                + "\n".join(output_lines)
+            )
 
     def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
         template = Template().from_dockerfile(dockerfile)

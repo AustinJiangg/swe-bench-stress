@@ -184,6 +184,10 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
         console.print(f"[green]✓[/] Exported {len(groups)} unique Dockerfiles to ./dockerfiles/")
         return
 
+    # Expose config values as env vars for the E2B SDK
+    os.environ.setdefault("E2B_API_KEY", cfg.e2b_api_key)
+    os.environ.setdefault("E2B_API_URL", cfg.e2b_api_url)
+
     builder = E2BTemplateBuilder(
         base_image=cfg.e2b_base_image,
         cache_file=str(Path(data_dir) / "template_cache.json"),

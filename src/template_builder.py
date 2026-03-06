@@ -20,11 +20,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
-from dotenv import load_dotenv
 from e2b import Template, default_build_logger
 from packaging.version import parse as parse_version
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 

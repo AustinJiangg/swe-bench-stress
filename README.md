@@ -57,6 +57,12 @@ uv sync
 cp .env.example .env
 ```
 
+配置值的优先级（从高到低）：
+
+```
+CLI 参数 > 环境变量 (export) > .env 文件 > config.py Field default
+```
+
 编辑 `.env`：
 
 ```dotenv
@@ -116,9 +122,9 @@ uv run python main.py build-templates --export-dockerfiles
 
 Template ID 缓存在 `./data/template_cache.json`，相同 `install_config` 只构建一次。
 
-> SDK 构建会通过 `load_dotenv()` + 进程环境自动读取 `E2B_API_KEY` / `E2B_API_URL`，
-> 不再在代码里显式传入这两个参数。
-> 同时默认使用 `Template.build(..., cpu_count=1, memory_mb=1024, on_build_logs=default_build_logger())`，
+> E2B SDK 通过进程环境变量读取 `E2B_API_KEY` / `E2B_API_URL`，
+> `main.py` 会在调用 SDK 前从 `Config` 导出到 `os.environ`。
+> 默认使用 `Template.build(..., cpu_count=1, memory_mb=1024, on_build_logs=default_build_logger())`，
 > 可通过 `.env` 的 `E2B_TEMPLATE_CPU_COUNT`、`E2B_TEMPLATE_MEMORY_MB` 覆盖。
 
 ### 5. 执行压测

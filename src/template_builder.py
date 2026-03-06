@@ -305,6 +305,7 @@ class E2BTemplateBuilder:
                 "--cpu-count", str(self.cpu_count),
                 "--memory-mb", str(self.memory_mb),
             ]
+            logger.info("Running: %s", " ".join(cmd))
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=tmpdir, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(

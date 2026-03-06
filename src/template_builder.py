@@ -25,18 +25,40 @@ from packaging.version import parse as parse_version
 
 logger = logging.getLogger(__name__)
 
-HEREDOC = "EOF"
 ENV = "testbed"
 RAW_URL = "https://raw.githubusercontent.com"
+CONDA_TOS = (
+    "RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main "
+    "&& conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r"
+)
 
 # --------------------------------------------------------------------------- #
 #  Dockerfile generation                                                        #
 # --------------------------------------------------------------------------- #
 
 
+def _printf_file(content: str, dest: str) -> str:
+    """Generate a ``RUN printf '%s\\n' ... > dest`` instruction from *content*."""
+    content_lines = [l for l in content.splitlines() if l.strip()]
+    if not content_lines:
+        return ""
+    escaped = [f"    '{l.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'" for l in content_lines]
+    body = " \\\n".join(escaped)
+    return f"RUN printf '%s\\n' \\\n{body} \\\n    > {dest}"
+
+
+def _strip_apt_update(cmd: str) -> str:
+    """Remove ``apt-get update`` from *cmd* while keeping other chained commands."""
+    # "apt-get update && apt-get install ..." → "apt-get install ..."
+    cleaned = re.sub(r"apt-get\s+update\s*&&\s*", "", cmd)
+    # standalone "apt-get update"
+    cleaned = re.sub(r"^\s*apt-get\s+update\s*$", "", cleaned)
+    return cleaned.strip()
+
+
 def generate_dockerfile(
     instance: dict[str, Any],
-    base_image: str = "sweb.base.py.arm64:latest",
+    base_image: str = "ubuntu:22.04-swe-base",
 ) -> str:
     specs = {k: v for k, v in (instance.get("install_config") or {}).items() if v is not None}
     repo = instance["repo"]
@@ -54,7 +76,7 @@ def generate_dockerfile(
     env_yml = instance.get("environment", "")
     reqs = instance.get("requirements", "")
     reqs_clean = "\n".join(l for l in reqs.splitlines() if l.strip() and not l.strip().startswith("-e "))
-    act = "" if no_use_env else f". /opt/miniconda3/bin/activate {ENV} && "
+    act = "" if no_use_env else f". activate {ENV} && "
 
     lines = [f"FROM {base_image}", ""]
 
@@ -66,32 +88,34 @@ def generate_dockerfile(
     # ── ENV LAYER ──────────────────────────────────────────────
     if no_use_env:
         if reqs_clean:
-            lines += [f"COPY <<'{HEREDOC}' /tmp/reqs.txt", reqs_clean, HEREDOC,
+            lines += [_printf_file(reqs_clean, "/tmp/reqs.txt"),
                        "RUN pip install --no-cache-dir -r /tmp/reqs.txt && rm /tmp/reqs.txt", ""]
         if pip_extra:
             lines += [f"RUN pip install --no-cache-dir {' '.join(pip_extra)}", ""]
     elif pkgs == "environment.yml":
+        lines += [CONDA_TOS, ""]
         if env_yml:
             yml = re.sub(r"^name\s*:.*", f"name: {ENV}", env_yml, count=1, flags=re.M)
             yml = re.sub(r"^prefix\s*:.*\n?", "", yml, flags=re.M)
-            lines += [f"COPY <<'{HEREDOC}' /tmp/env.yml", yml.strip(), HEREDOC,
-                       f"RUN /opt/miniconda3/bin/conda env create -f /tmp/env.yml && "
-                       f"/opt/miniconda3/bin/conda clean -afy && rm /tmp/env.yml", ""]
+            lines += [_printf_file(yml.strip(), "/tmp/env.yml"),
+                       f"RUN conda env create -f /tmp/env.yml && "
+                       f"conda clean -afy && rm /tmp/env.yml", ""]
         else:
             for p in (specs.get("env_yml_path") or ["environment.yml"]):
                 url = f"{RAW_URL}/{repo}/{env_commit}/{p}"
                 lines += [f"RUN curl -fsSL {url} -o /tmp/env.yml && "
                            f"sed -i 's/^name:.*/name: {ENV}/' /tmp/env.yml && "
-                           f"/opt/miniconda3/bin/conda env create -f /tmp/env.yml && "
-                           f"/opt/miniconda3/bin/conda clean -afy && rm /tmp/env.yml || true"]
+                           f"conda env create -f /tmp/env.yml && "
+                           f"conda clean -afy && rm /tmp/env.yml || true"]
             lines.append("")
         if pip_extra:
             lines += [f"RUN {act}pip install --no-cache-dir {' '.join(pip_extra)}", ""]
     elif pkgs == "requirements.txt":
-        lines += [f"RUN /opt/miniconda3/bin/conda create -n {ENV} python={py} -y && "
-                   f"/opt/miniconda3/bin/conda clean -afy", ""]
+        lines += [CONDA_TOS,
+                   f"RUN conda create -n {ENV} python={py} -y && "
+                   f"conda clean -afy", ""]
         if reqs_clean:
-            lines += [f"COPY <<'{HEREDOC}' /tmp/reqs.txt", reqs_clean, HEREDOC,
+            lines += [_printf_file(reqs_clean, "/tmp/reqs.txt"),
                        f"RUN {act}pip install --no-cache-dir -r /tmp/reqs.txt && rm /tmp/reqs.txt", ""]
         else:
             for rp in (specs.get("reqs_path") or ["requirements.txt"]):
@@ -102,8 +126,9 @@ def generate_dockerfile(
         if pip_extra:
             lines += [f"RUN {act}pip install --no-cache-dir {' '.join(pip_extra)}", ""]
     else:  # inline pip packages string
-        lines += [f"RUN /opt/miniconda3/bin/conda create -n {ENV} python={py} -y && "
-                   f"/opt/miniconda3/bin/conda clean -afy", ""]
+        lines += [CONDA_TOS,
+                   f"RUN conda create -n {ENV} python={py} -y && "
+                   f"conda clean -afy", ""]
         if pkgs.strip():
             lines += [f"RUN {act}pip install --no-cache-dir {pkgs}", ""]
         if pip_extra:
@@ -118,7 +143,9 @@ def generate_dockerfile(
         f"RUN git -c advice.detachedHead=false checkout {commit}", "",
     ]
     for cmd in pre_install:
-        lines.append(f"RUN {act}{cmd}")
+        cleaned = _strip_apt_update(cmd)
+        if cleaned:
+            lines.append(f"RUN {act}{cleaned}")
     if pre_install:
         lines.append("")
     if install:

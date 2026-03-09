@@ -95,6 +95,9 @@ uv run python main.py download-data \
 
 # 混用：tasks 本地、trajectories 远程
 uv run python main.py download-data --local-tasks /data/SWE-rebench
+
+# 只下载与已有轨迹匹配的 tasks（跳过批量下载，适合单条/少量轨迹回放）
+uv run python main.py download-data --n-trajectories 1 --match-tasks
 ```
 
 数据缓存到 `./data/tasks.json` 和 `./data/trajectories.json`，再次运行直接复用。
@@ -115,6 +118,9 @@ uv run python main.py build-templates --n-tasks 100 --strategy sdk
 
 # 通过 e2b CLI 工具构建
 uv run python main.py build-templates --strategy cli
+
+# 仅构建与已下载轨迹匹配的 template（避免构建无用 template）
+uv run python main.py build-templates --for-trajectories --strategy cli
 
 # 仅导出 Dockerfile，不实际构建（调试）
 uv run python main.py build-templates --export-dockerfiles
@@ -144,6 +150,21 @@ uv run python main.py run-stress-test --n-traj 50 --all-ops
 ```
 
 报告自动保存到 `./results/report_<timestamp>.json`。
+
+### 单条轨迹回放（端到端示例）
+
+只下载 1 条轨迹，自动匹配对应 task，构建 template，然后回放：
+
+```bash
+# 1. 下载 1 条轨迹 + 自动匹配 task
+uv run python main.py download-data --n-trajectories 1 --match-tasks
+
+# 2. 只为该轨迹构建 template
+uv run python main.py build-templates --for-trajectories --strategy cli
+
+# 3. 回放
+uv run python main.py run-stress-test --n-traj 1
+```
 
 ### 6. 查看报告
 
@@ -229,11 +250,13 @@ uv run python main.py download-data
   --data-dir PATH              数据目录
   --local-tasks PATH           本地 SWE-rebench 目录（跳过 HuggingFace）
   --local-trajectories PATH    本地 trajectories 目录（跳过 HuggingFace）
+  --match-tasks                跳过批量下载，只获取与已下载轨迹匹配的 tasks
 
 uv run python main.py build-templates
   --n-tasks INT          处理任务数
   --strategy [sdk|cli]   构建策略（默认 sdk）
   --export-dockerfiles   仅导出 Dockerfile，不构建
+  --for-trajectories     只构建与已下载轨迹匹配的 template
   --data-dir PATH
 
 uv run python main.py run-stress-test

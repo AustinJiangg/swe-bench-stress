@@ -116,6 +116,31 @@ class DatasetDownloader:
             task["install_config"] = {k: v for k, v in ic.items() if v is not None}
         return task
 
+    def download_tasks_by_ids(self, instance_ids: set[str], max_scan: int = 0) -> list[dict]:
+        """Stream through tasks dataset, collecting only rows matching *instance_ids*.
+
+        Stops early once every requested ID has been found.
+
+        Args:
+            instance_ids: Set of instance_id values to look for.
+            max_scan: Max rows to scan (0 = entire dataset).
+
+        Returns:
+            List of matching task dicts.
+        """
+        found: list[dict] = []
+        remaining = set(instance_ids)
+        logger.info("Scanning tasks dataset for %d instance_id(s)...", len(remaining))
+        for row in self.stream_tasks(n_samples=max_scan):
+            iid = row.get("instance_id")
+            if iid in remaining:
+                found.append(self._clean_task(row))
+                remaining.discard(iid)
+                if not remaining:
+                    break
+        logger.info("Found %d/%d requested tasks", len(found), len(instance_ids))
+        return found
+
     # ------------------------------------------------------------- trajectories
 
     def stream_trajectories(self, n_samples: int = 0) -> Iterator[dict]:

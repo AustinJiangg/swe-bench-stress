@@ -82,8 +82,11 @@ def cli(debug: bool):
               help="Local directory of SWE-rebench dataset (skip HuggingFace).")
 @click.option("--local-trajectories", default=None, metavar="PATH",
               help="Local directory of SWE-rebench-openhands-trajectories dataset (skip HuggingFace).")
+@click.option("--match-tasks", is_flag=True,
+              help="Skip bulk task download; instead fetch only tasks matching downloaded trajectories.")
 def download_data(n_tasks: int | None, n_trajectories: int | None, data_dir: str | None,
-                  local_tasks: str | None, local_trajectories: str | None):
+                  local_tasks: str | None, local_trajectories: str | None,
+                  match_tasks: bool):
     """Download SWE-rebench tasks and trajectories from HuggingFace (or local path)."""
     from config import Config
     from src.downloader import DatasetDownloader
@@ -102,15 +105,45 @@ def download_data(n_tasks: int | None, n_trajectories: int | None, data_dir: str
         local_trajs_dir=local_trajectories or "",
     )
 
-    with console.status("[bold green]Downloading tasks..."):
-        tasks = downloader.download_tasks(n_samples=n_tasks)
-    console.print(f"[green]✓[/] Downloaded {len(tasks)} task instances → {data_dir}/tasks.json")
-
+    # ---- download trajectories first (needed if --match-tasks)
     with console.status("[bold green]Downloading trajectories..."):
         trajs = downloader.download_trajectories(n_samples=n_trajectories)
     console.print(
         f"[green]✓[/] Downloaded {len(trajs)} trajectories → {data_dir}/trajectories.json"
     )
+
+    # ---- download tasks
+    if match_tasks:
+        # Only fetch tasks whose instance_id appears in the downloaded trajectories
+        traj_ids = {t.get("instance_id") for t in trajs if t.get("instance_id")}
+
+        # Load existing cached tasks (if any)
+        tasks_path = Path(data_dir) / "tasks.json"
+        tasks: list[dict] = []
+        if tasks_path.exists():
+            with open(tasks_path) as f:
+                tasks = json.load(f)
+
+        existing_ids = {t.get("instance_id") for t in tasks}
+        missing_ids = traj_ids - existing_ids
+
+        if missing_ids:
+            console.print(f"[yellow]Scanning tasks dataset for {len(missing_ids)} trajectory-matched task(s)...[/]")
+            with console.status("[bold green]Fetching matched tasks..."):
+                matched = downloader.download_tasks_by_ids(missing_ids)
+            if matched:
+                tasks.extend(matched)
+                with open(tasks_path, "w") as f:
+                    json.dump(tasks, f, indent=2)
+                console.print(f"[green]✓[/] Found {len(matched)}/{len(missing_ids)} matched tasks → {data_dir}/tasks.json")
+            else:
+                console.print(f"[red]Could not find any matching tasks in the dataset[/]")
+        else:
+            console.print(f"[green]✓[/] All {len(traj_ids)} trajectory instance_ids already have matching tasks")
+    else:
+        with console.status("[bold green]Downloading tasks..."):
+            tasks = downloader.download_tasks(n_samples=n_tasks)
+        console.print(f"[green]✓[/] Downloaded {len(tasks)} task instances → {data_dir}/tasks.json")
 
     # Quick stats
     with_config = sum(1 for t in tasks if t.get("install_config"))
@@ -128,8 +161,11 @@ def download_data(n_tasks: int | None, n_trajectories: int | None, data_dir: str
               show_default=True, help="Template build strategy.")
 @click.option("--export-dockerfiles", is_flag=True,
               help="Export Dockerfiles to ./dockerfiles/ without building.")
+@click.option("--for-trajectories", is_flag=True,
+              help="Only build templates for tasks that have matching trajectories.")
 @click.option("--data-dir", default=None)
-def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_dir: str | None):
+def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
+                    for_trajectories: bool, data_dir: str | None):
     """Build E2B templates from task install_configs."""
     from config import Config
     from src.template_builder import (
@@ -151,6 +187,17 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool, data_
 
     if n_tasks > 0:
         tasks = tasks[:n_tasks]
+
+    if for_trajectories:
+        trajs_path = Path(data_dir) / "trajectories.json"
+        if trajs_path.exists():
+            with open(trajs_path) as f:
+                trajs = json.load(f)
+            traj_ids = {t.get("instance_id") for t in trajs}
+            tasks = [t for t in tasks if t.get("instance_id") in traj_ids]
+            console.print(f"Filtered to {len(tasks)} tasks matching trajectories")
+        else:
+            console.print("[yellow]No trajectories.json found, building for all tasks[/]")
 
     # ---- group by install_config
     groups = group_tasks_by_config(tasks)

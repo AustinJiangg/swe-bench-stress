@@ -68,7 +68,7 @@ CLI 参数 > 环境变量 (export) > .env 文件 > config.py Field default
 ```dotenv
 E2B_API_KEY=your-api-key
 E2B_API_URL=http://localhost:3000          # 自部署 E2B 地址
-E2B_BASE_IMAGE=61.47.17.182:89/e2b/ubuntu:22.04-custom
+E2B_BASE_IMAGE=ubuntu:22.04-swe-base
 E2B_TEMPLATE_CPU_COUNT=1                   # Template.build(cpu_count)
 E2B_TEMPLATE_MEMORY_MB=1024                # Template.build(memory_mb)
 

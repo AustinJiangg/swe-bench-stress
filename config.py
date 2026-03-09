@@ -8,7 +8,7 @@ class Config(BaseSettings):
     e2b_api_key: str = Field(default="test-key", alias="E2B_API_KEY")
     e2b_api_url: str = Field(default="http://localhost:3000", alias="E2B_API_URL")
     e2b_base_image: str = Field(
-        default="61.47.17.182:89/e2b/ubuntu:22.04-custom",
+        default="ubuntu:22.04-swe-base",
         alias="E2B_BASE_IMAGE",
     )
 

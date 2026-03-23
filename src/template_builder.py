@@ -23,6 +23,8 @@ from typing import Any, Optional
 from e2b import Template, default_build_logger
 from packaging.version import parse as parse_version
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 ENV = "testbed"
@@ -79,6 +81,16 @@ def generate_dockerfile(
     act = "" if no_use_env else f". activate {ENV} && "
 
     lines = [f"FROM {base_image}", ""]
+
+    # ── PROXY ENV ─────────────────────────────────────────────
+    if config.http_proxy:
+        lines.append(f"ENV http_proxy={config.http_proxy}")
+    if config.https_proxy:
+        lines.append(f"ENV https_proxy={config.https_proxy}")
+    if config.no_proxy:
+        lines.append(f"ENV no_proxy={config.no_proxy}")
+    if config.http_proxy or config.https_proxy or config.no_proxy:
+        lines.append("")
 
     for k, v in env_vars.items():
         lines.append(f"ENV {k}={v}")

@@ -33,6 +33,11 @@ class Config(BaseSettings):
     n_tasks: int = Field(default=100, alias="N_TASKS")
     n_trajectories: int = Field(default=50, alias="N_TRAJECTORIES")
 
+    # Proxy settings (injected into generated Dockerfiles)
+    http_proxy: str = Field(default="", alias="HTTP_PROXY")
+    https_proxy: str = Field(default="", alias="HTTPS_PROXY")
+    no_proxy: str = Field(default="", alias="NO_PROXY")
+
     model_config = {"env_file": ".env", "populate_by_name": True}
 
     def ensure_dirs(self):

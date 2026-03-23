@@ -12,6 +12,7 @@ class Config(BaseSettings):
         alias="E2B_BASE_IMAGE",
     )
     docker_registry_url: str = Field(default="localhost:5000", alias="DOCKER_REGISTRY_URL")
+    docker_registry_repo: str = Field(default="e2b", alias="DOCKER_REGISTRY_REPO")
     e2b_registry_username: str = Field(default="", alias="E2B_REGISTRY_USERNAME")
     e2b_registry_password: str = Field(default="", alias="E2B_REGISTRY_PASSWORD")
 

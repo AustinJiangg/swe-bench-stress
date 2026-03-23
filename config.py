@@ -11,6 +11,7 @@ class Config(BaseSettings):
         default="ubuntu:22.04-swe-base",
         alias="E2B_BASE_IMAGE",
     )
+    docker_registry_url: str = Field(default="localhost:5000", alias="DOCKER_REGISTRY_URL")
     e2b_registry_username: str = Field(default="", alias="E2B_REGISTRY_USERNAME")
     e2b_registry_password: str = Field(default="", alias="E2B_REGISTRY_PASSWORD")
 

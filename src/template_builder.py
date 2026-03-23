@@ -237,6 +237,7 @@ class E2BTemplateBuilder:
         registry_username: str = "",
         registry_password: str = "",
         docker_registry_url: str = "localhost:5000",
+        docker_registry_repo: str = "e2b",
     ):
         self.base_image = base_image
         self.cache = TemplateCache(cache_file)
@@ -246,6 +247,7 @@ class E2BTemplateBuilder:
         self.registry_username = registry_username
         self.registry_password = registry_password
         self.docker_registry_url = docker_registry_url
+        self.docker_registry_repo = docker_registry_repo
 
     def _make_instance(self, group: dict) -> dict[str, Any]:
         """Build the instance dict that generate_dockerfile expects from a group entry."""
@@ -258,6 +260,17 @@ class E2BTemplateBuilder:
             "requirements": group.get("requirements", ""),
         }
 
+    @staticmethod
+    def _make_image_name(name_prefix: str, repo: str, fp: str) -> str:
+        """Build a descriptive Docker image name from repo and fingerprint.
+
+        Example: ``swe-django__django-976d053c`` (prefix-repo-fingerprint8).
+        """
+        if repo:
+            repo_slug = repo.replace("/", "__").replace(".", "-").lower()
+            return f"{name_prefix}-{repo_slug}-{fp[:8]}"
+        return f"{name_prefix}-{fp}"
+
     def get_or_build(self, group: dict, name_prefix: str = "swe") -> str:
         fp = fingerprint_install_config(group["config"], group["repo"], group["base_commit"])
         cached = self.cache.get(fp)
@@ -266,7 +279,7 @@ class E2BTemplateBuilder:
             return cached
 
         dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
-        template_name = f"{name_prefix}-{fp}"
+        template_name = self._make_image_name(name_prefix, group["repo"], fp)
         logger.info("Building new template: %s", template_name)
 
         # Step 1: Build Docker image and push to private registry
@@ -304,17 +317,19 @@ class E2BTemplateBuilder:
     def _build_and_push_image(self, dockerfile: str, image_name: str) -> str:
         """Build a Docker image from *dockerfile* and push it to the private registry.
 
-        Returns the full image reference (e.g. ``registry:5000/swe-abc123:latest``).
+        Returns the full image reference (e.g. ``registry:5000/e2b/swe-django__django-abc123:latest``).
         """
-        image_ref = f"{self.docker_registry_url}/{image_name}:latest"
+        # Build local image with short name, then tag with full registry path for push
+        local_tag = f"{image_name}:latest"
+        image_ref = f"{self.docker_registry_url}/{self.docker_registry_repo}/{image_name}:latest"
         logger.info("Building Docker image: %s", image_ref)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             df_path = Path(tmpdir) / "Dockerfile"
             df_path.write_text(dockerfile)
 
-            # Build
-            build_cmd = ["docker", "build", "-t", image_ref, "-f", str(df_path), tmpdir]
+            # Build with local tag
+            build_cmd = ["docker", "build", "-t", local_tag, "-f", str(df_path), tmpdir]
             logger.info("Running: %s", " ".join(build_cmd))
             proc = subprocess.run(
                 build_cmd, capture_output=True, text=True,
@@ -323,7 +338,16 @@ class E2BTemplateBuilder:
                 raise RuntimeError(
                     f"docker build failed (exit {proc.returncode}):\n{proc.stderr}"
                 )
-            logger.info("Docker image built successfully: %s", image_ref)
+            logger.info("Docker image built successfully: %s", local_tag)
+
+        # Tag with full registry path for push
+        tag_cmd = ["docker", "tag", local_tag, image_ref]
+        logger.info("Tagging image: %s -> %s", local_tag, image_ref)
+        proc = subprocess.run(tag_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"docker tag failed (exit {proc.returncode}):\n{proc.stderr}"
+            )
 
         # Login to registry if credentials are provided
         if self.registry_username and self.registry_password:

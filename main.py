@@ -241,6 +241,8 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
         strategy=strategy,
         cpu_count=cfg.e2b_template_cpu_count,
         memory_mb=cfg.e2b_template_memory_mb,
+        registry_username=cfg.e2b_registry_username,
+        registry_password=cfg.e2b_registry_password,
     )
 
     mapping = builder.get_or_build_batch(tasks, name_prefix="swe")

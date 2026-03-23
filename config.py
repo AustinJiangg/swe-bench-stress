@@ -11,6 +11,8 @@ class Config(BaseSettings):
         default="ubuntu:22.04-swe-base",
         alias="E2B_BASE_IMAGE",
     )
+    e2b_registry_username: str = Field(default="", alias="E2B_REGISTRY_USERNAME")
+    e2b_registry_password: str = Field(default="", alias="E2B_REGISTRY_PASSWORD")
 
     e2b_template_cpu_count: int = Field(default=1, alias="E2B_TEMPLATE_CPU_COUNT")
     e2b_template_memory_mb: int = Field(default=1024, alias="E2B_TEMPLATE_MEMORY_MB")

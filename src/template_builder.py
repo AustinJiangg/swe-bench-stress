@@ -234,12 +234,16 @@ class E2BTemplateBuilder:
         strategy: str = "sdk",  # "cli" | "sdk"
         cpu_count: int = 1,
         memory_mb: int = 1024,
+        registry_username: str = "",
+        registry_password: str = "",
     ):
         self.base_image = base_image
         self.cache = TemplateCache(cache_file)
         self.strategy = strategy
         self.cpu_count = cpu_count
         self.memory_mb = memory_mb
+        self.registry_username = registry_username
+        self.registry_password = registry_password
 
     def _make_instance(self, group: dict) -> dict[str, Any]:
         """Build the instance dict that generate_dockerfile expects from a group entry."""
@@ -335,7 +339,15 @@ class E2BTemplateBuilder:
             )
 
     def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
-        template = Template().from_dockerfile(dockerfile)
+        tpl = Template()
+        template = tpl.from_dockerfile(dockerfile)
+
+        if self.registry_username and self.registry_password:
+            tpl._registry_config = {
+                "type": "registry",
+                "username": self.registry_username,
+                "password": self.registry_password,
+            }
 
         build_info = Template.build(
             template,

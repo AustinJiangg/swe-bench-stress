@@ -236,6 +236,7 @@ class E2BTemplateBuilder:
         memory_mb: int = 1024,
         registry_username: str = "",
         registry_password: str = "",
+        docker_registry_url: str = "localhost:5000",
     ):
         self.base_image = base_image
         self.cache = TemplateCache(cache_file)
@@ -244,6 +245,7 @@ class E2BTemplateBuilder:
         self.memory_mb = memory_mb
         self.registry_username = registry_username
         self.registry_password = registry_password
+        self.docker_registry_url = docker_registry_url
 
     def _make_instance(self, group: dict) -> dict[str, Any]:
         """Build the instance dict that generate_dockerfile expects from a group entry."""
@@ -267,10 +269,14 @@ class E2BTemplateBuilder:
         template_name = f"{name_prefix}-{fp}"
         logger.info("Building new template: %s", template_name)
 
+        # Step 1: Build Docker image and push to private registry
+        image_ref = self._build_and_push_image(dockerfile, template_name)
+
+        # Step 2: Create E2B template from the pushed image
         if self.strategy == "cli":
-            template_id = self._build_via_cli(dockerfile, template_name)
+            template_id = self._build_via_cli(image_ref, template_name)
         else:
-            template_id = self._build_via_sdk(dockerfile, template_name)
+            template_id = self._build_via_sdk(image_ref, template_name)
 
         self.cache.set(fp, template_id)
         logger.info("Template built: %s -> %s", template_name, template_id)
@@ -295,10 +301,63 @@ class E2BTemplateBuilder:
 
         return result
 
-    def _build_via_cli(self, dockerfile: str, template_name: str) -> str:
+    def _build_and_push_image(self, dockerfile: str, image_name: str) -> str:
+        """Build a Docker image from *dockerfile* and push it to the private registry.
+
+        Returns the full image reference (e.g. ``registry:5000/swe-abc123:latest``).
+        """
+        image_ref = f"{self.docker_registry_url}/{image_name}:latest"
+        logger.info("Building Docker image: %s", image_ref)
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            df_path = Path(tmpdir) / "e2b.Dockerfile"
+            df_path = Path(tmpdir) / "Dockerfile"
             df_path.write_text(dockerfile)
+
+            # Build
+            build_cmd = ["docker", "build", "-t", image_ref, "-f", str(df_path), tmpdir]
+            logger.info("Running: %s", " ".join(build_cmd))
+            proc = subprocess.run(
+                build_cmd, capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"docker build failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+            logger.info("Docker image built successfully: %s", image_ref)
+
+        # Login to registry if credentials are provided
+        if self.registry_username and self.registry_password:
+            login_cmd = [
+                "docker", "login", self.docker_registry_url,
+                "-u", self.registry_username,
+                "--password-stdin",
+            ]
+            login_proc = subprocess.run(
+                login_cmd, input=self.registry_password,
+                capture_output=True, text=True,
+            )
+            if login_proc.returncode != 0:
+                raise RuntimeError(
+                    f"docker login failed (exit {login_proc.returncode}):\n{login_proc.stderr}"
+                )
+
+        # Push
+        push_cmd = ["docker", "push", image_ref]
+        logger.info("Pushing image: %s", image_ref)
+        proc = subprocess.run(push_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"docker push failed (exit {proc.returncode}):\n{proc.stderr}"
+            )
+        logger.info("Image pushed successfully: %s", image_ref)
+
+        return image_ref
+
+    def _build_via_cli(self, image_ref: str, template_name: str) -> str:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a minimal Dockerfile that pulls from the pre-built image
+            df_path = Path(tmpdir) / "e2b.Dockerfile"
+            df_path.write_text(f"FROM {image_ref}\n")
 
             cmd = [
                 "e2b",
@@ -338,7 +397,10 @@ class E2BTemplateBuilder:
                 + "\n".join(output_lines)
             )
 
-    def _build_via_sdk(self, dockerfile: str, template_name: str) -> str:
+    def _build_via_sdk(self, image_ref: str, template_name: str) -> str:
+        # Create a minimal Dockerfile that uses the pre-built image
+        dockerfile = f"FROM {image_ref}\n"
+
         tpl = Template()
         template = tpl.from_dockerfile(dockerfile)
 

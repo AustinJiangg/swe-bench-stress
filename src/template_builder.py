@@ -434,18 +434,16 @@ class E2BTemplateBuilder:
             )
 
     def _build_via_sdk(self, image_ref: str, template_name: str) -> str:
-        # Create a minimal Dockerfile that uses the pre-built image
-        dockerfile = f"FROM {image_ref}\n"
-
+        # Use from_image() to properly pass registry credentials alongside the
+        # image reference.  The previous from_dockerfile("FROM <ref>") approach
+        # did not propagate credentials, causing E2B's server to fail with
+        # "invalid UUID length: 0" when trying to resolve the private image.
         tpl = Template()
-        template = tpl.from_dockerfile(dockerfile)
-
-        if self.registry_username and self.registry_password:
-            tpl._registry_config = {
-                "type": "registry",
-                "username": self.registry_username,
-                "password": self.registry_password,
-            }
+        template = tpl.from_image(
+            image_ref,
+            username=self.registry_username or None,
+            password=self.registry_password or None,
+        )
 
         build_info = Template.build(
             template,

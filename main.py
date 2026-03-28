@@ -270,8 +270,10 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
               help="Max concurrent sandboxes (default from config).")
 @click.option("--template-id", default=None,
               help="Override template ID for all sandboxes.")
-@click.option("--all-ops", is_flag=True,
-              help="Replay all op types (default: bash only).")
+@click.option("--bash-only", is_flag=True, default=False,
+              help="Only replay bash commands (skips file ops; cannot produce correct patches).")
+@click.option("--no-patch", is_flag=True, default=False,
+              help="Skip patch extraction and comparison after replay.")
 @click.option("--ramp-delay", default=0.0, show_default=True,
               help="Seconds between successive sandbox launches (ramp-up).")
 @click.option("--data-dir", default=None)
@@ -280,7 +282,8 @@ def run_stress_test(
     n_traj: int,
     concurrency: int | None,
     template_id: str | None,
-    all_ops: bool,
+    bash_only: bool,
+    no_patch: bool,
     ramp_delay: float,
     data_dir: str | None,
     results_dir: str | None,
@@ -350,7 +353,8 @@ def run_stress_test(
         max_concurrent=max_concurrent,
         sandbox_timeout=cfg.sandbox_timeout,
         command_timeout=cfg.command_timeout,
-        bash_only=not all_ops,
+        bash_only=bash_only,
+        extract_patch=not no_patch,
         ramp_up_delay_s=ramp_delay,
         results_dir=results_dir,
     )
@@ -403,11 +407,12 @@ def run_stress_test(
 
     console.print(Panel(
         f"[bold]Stress Test Starting[/bold]\n"
-        f"  Trajectories : {total}\n"
-        f"  Concurrency  : {max_concurrent}\n"
-        f"  Bash only    : {not all_ops}\n"
-        f"  Ramp delay   : {ramp_delay}s\n"
-        f"  E2B API URL  : {cfg.e2b_api_url}",
+        f"  Trajectories   : {total}\n"
+        f"  Concurrency    : {max_concurrent}\n"
+        f"  Bash only      : {bash_only}\n"
+        f"  Extract patch  : {not no_patch}\n"
+        f"  Ramp delay     : {ramp_delay}s\n"
+        f"  E2B API URL    : {cfg.e2b_api_url}",
         title="Config",
         border_style="cyan",
     ))
@@ -458,6 +463,20 @@ def _print_report(report):
                  f"{report.p50_create_s:.3f}s / {report.p95_create_s:.3f}s / {report.p99_create_s:.3f}s")
     grid.add_row("Command latency p50/p95/p99",
                  f"{report.p50_cmd_s:.3f}s / {report.p95_cmd_s:.3f}s / {report.p99_cmd_s:.3f}s")
+
+    # Patch validation results
+    patch_compared = getattr(report, "patch_compared", 0)
+    patch_matched = getattr(report, "patch_matched", 0)
+    patch_mismatched = getattr(report, "patch_mismatched", 0)
+    if patch_compared > 0:
+        grid.add_row("", "")
+        grid.add_row("Patch compared", str(patch_compared))
+        grid.add_row(
+            "Patch match / mismatch",
+            f"[green]{patch_matched}[/] / [red]{patch_mismatched}[/]",
+        )
+        match_rate = 100 * patch_matched / max(patch_compared, 1)
+        grid.add_row("Patch match rate", f"[{'green' if match_rate > 80 else 'yellow' if match_rate > 50 else 'red'}]{match_rate:.1f}%[/]")
 
     console.print(Panel(grid, title="[bold]Stress Test Results[/bold]", border_style="green"))
 

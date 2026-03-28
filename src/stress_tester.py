@@ -88,6 +88,9 @@ class SandboxResult:
     started_at_s: float = 0.0   # monotonic offset from test start (for timeline)
     commands: list[CommandResult] = field(default_factory=list)
     error: Optional[str] = None
+    model_patch: str = ""       # expected patch from trajectory
+    actual_patch: str = ""      # git diff captured after replay
+    patch_match: bool | None = None  # None=skipped, True/False=compared
 
     @property
     def success(self) -> bool:
@@ -125,6 +128,10 @@ class StressTestReport:
     per_op_type_stats: dict[str, dict] = field(default_factory=dict)
     error_categories: dict[str, int] = field(default_factory=dict)
     timeline: list[dict] = field(default_factory=list)
+    # patch validation
+    patch_compared: int = 0
+    patch_matched: int = 0
+    patch_mismatched: int = 0
     sandbox_results: list[SandboxResult] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -141,6 +148,7 @@ class StressTestReport:
                 "n_commands": r.n_commands,
                 "n_failed_commands": r.n_failed_commands,
                 "error": r.error,
+                "patch_match": r.patch_match,
             }
             for r in self.sandbox_results
         ]
@@ -160,6 +168,9 @@ class StressTestReport:
         data.setdefault("per_op_type_stats", {})
         data.setdefault("error_categories", {})
         data.setdefault("timeline", [])
+        data.setdefault("patch_compared", 0)
+        data.setdefault("patch_matched", 0)
+        data.setdefault("patch_mismatched", 0)
         # sandbox_results in saved JSON are summaries (dicts), not full SandboxResult
         report = cls(**data, sandbox_results=[])
         # Attach raw summary dicts as lightweight objects for display
@@ -374,8 +385,9 @@ class SandboxRunner:
         ops: list,
         template_id: str,
         test_start_mono: float,
+        model_patch: str = "",
     ) -> SandboxResult:
-        """Create one sandbox, replay ops, collect metrics, destroy."""
+        """Create one sandbox, replay ops, extract patch, compare, destroy."""
         from src.trajectory_parser import OpType
 
         t0 = time.monotonic()
@@ -384,6 +396,8 @@ class SandboxRunner:
         sandbox_id = None
         create_time = 0.0
         commands: list[CommandResult] = []
+        actual_patch = ""
+        patch_match_result: bool | None = None
 
         try:
             # ---- create sandbox with retry
@@ -417,10 +431,34 @@ class SandboxRunner:
                             sandbox_id, cmd_result.error,
                         )
 
+            # ---- extract actual patch via git diff
+            if self._cfg.extract_patch and not self._shutdown_event.is_set():
+                try:
+                    diff_result = await asyncio.wait_for(
+                        sandbox.commands.run(
+                            "cd /testbed && git add -A && git diff --cached HEAD"
+                        ),
+                        timeout=30,
+                    )
+                    actual_patch = (diff_result.stdout or "").strip()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to extract patch from %s: %s", sandbox_id, exc,
+                    )
+
+            # ---- compare patches
+            if model_patch and actual_patch:
+                from src.patch_compare import patches_match
+                patch_match_result = patches_match(model_patch, actual_patch)
+            elif model_patch and not actual_patch:
+                patch_match_result = False  # expected changes but got none
+
             self._emit(
                 EventType.TRAJECTORY_DONE, instance_id,
                 sandbox_id=sandbox_id,
-                detail=f"{len(commands)} ops in {time.monotonic() - t0:.1f}s",
+                detail=f"{len(commands)} ops in {time.monotonic() - t0:.1f}s"
+                       + (f" patch={'match' if patch_match_result else 'mismatch'}"
+                          if patch_match_result is not None else ""),
             )
 
             return SandboxResult(
@@ -431,6 +469,9 @@ class SandboxRunner:
                 total_duration_s=time.monotonic() - t0,
                 started_at_s=started_at_s,
                 commands=commands,
+                model_patch=model_patch,
+                actual_patch=actual_patch,
+                patch_match=patch_match_result,
             )
 
         except Exception as exc:
@@ -448,6 +489,9 @@ class SandboxRunner:
                 started_at_s=started_at_s,
                 commands=commands,
                 error=str(exc),
+                model_patch=model_patch,
+                actual_patch=actual_patch,
+                patch_match=patch_match_result,
             )
 
         finally:
@@ -510,7 +554,8 @@ class StressTestConfig:
     max_concurrent: int = 10
     sandbox_timeout: int = 300
     command_timeout: int = 60
-    bash_only: bool = True              # only replay bash commands
+    bash_only: bool = False             # replay all op types by default for correct patches
+    extract_patch: bool = True          # run git diff after replay to capture changes
     ramp_up_delay_s: float = 0.0        # minimum seconds between sandbox launches
     results_dir: str = "./results"
 
@@ -599,6 +644,7 @@ class StressTester:
                     ops=pt.ops,
                     template_id=tid,
                     test_start_mono=t_start,
+                    model_patch=getattr(pt, "model_patch", ""),
                 )
 
         tasks = [asyncio.create_task(run_one(pt)) for pt in parsed_trajectories]
@@ -711,6 +757,11 @@ class StressTester:
             for r in results
         ]
 
+        # Patch validation stats
+        patch_compared = sum(1 for r in results if r.patch_match is not None)
+        patch_matched = sum(1 for r in results if r.patch_match is True)
+        patch_mismatched = sum(1 for r in results if r.patch_match is False)
+
         create_pcts = _percentiles(create_times)
         cmd_pcts = _percentiles(all_cmd_durations)
         throughput = len(results) / (elapsed_s / 60) if elapsed_s > 0 else 0.0
@@ -743,5 +794,8 @@ class StressTester:
             per_op_type_stats=per_op_type_stats,
             error_categories=dict(error_categories),
             timeline=timeline,
+            patch_compared=patch_compared,
+            patch_matched=patch_matched,
+            patch_mismatched=patch_mismatched,
             sandbox_results=results,
         )

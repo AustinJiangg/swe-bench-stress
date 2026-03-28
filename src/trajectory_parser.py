@@ -78,6 +78,7 @@ class ParsedTrajectory:
     raw_messages: list[dict]
     n_assistant_turns: int
     n_tool_calls: int
+    model_patch: str = ""           # expected patch from trajectory data
 
 
 # --------------------------------------------------------------------------- #
@@ -247,6 +248,7 @@ class TrajectoryParser:
     def parse(self, row: dict) -> ParsedTrajectory:
         """Parse a single trajectory row from the HuggingFace dataset."""
         instance_id = row.get("instance_id") or row.get("id") or "unknown"
+        model_patch = row.get("model_patch") or row.get("git_patch") or ""
         raw_messages = [_clean_message(m) for m in (row.get("trajectory") or [])]
 
         ops: list[SandboxOp] = []
@@ -280,6 +282,7 @@ class TrajectoryParser:
             raw_messages=raw_messages,
             n_assistant_turns=n_assistant,
             n_tool_calls=n_tool_calls,
+            model_patch=model_patch,
         )
 
     def parse_many(self, rows: list[dict]) -> list[ParsedTrajectory]:

@@ -415,13 +415,10 @@ class SandboxRunner:
 
             # ---- replay ops
             executor = OpExecutor(sandbox, self._cfg.command_timeout)
-            bash_only = self._cfg.bash_only
             for op in ops:
                 # cooperative shutdown check
                 if self._shutdown_event.is_set():
                     break
-                if bash_only and op.op_type != OpType.BASH:
-                    continue
                 cmd_result = await executor.execute(op)
                 if cmd_result is not None:
                     commands.append(cmd_result)
@@ -554,7 +551,6 @@ class StressTestConfig:
     max_concurrent: int = 10
     sandbox_timeout: int = 300
     command_timeout: int = 60
-    bash_only: bool = False             # replay all op types by default for correct patches
     extract_patch: bool = True          # run git diff after replay to capture changes
     ramp_up_delay_s: float = 0.0        # minimum seconds between sandbox launches
     results_dir: str = "./results"
@@ -774,7 +770,6 @@ class StressTester:
                 "max_concurrent": cfg.max_concurrent,
                 "sandbox_timeout": cfg.sandbox_timeout,
                 "command_timeout": cfg.command_timeout,
-                "bash_only": cfg.bash_only,
                 "ramp_up_delay_s": cfg.ramp_up_delay_s,
                 "n_trajectories": len(results),
             },

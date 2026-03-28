@@ -270,8 +270,6 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
               help="Max concurrent sandboxes (default from config).")
 @click.option("--template-id", default=None,
               help="Override template ID for all sandboxes.")
-@click.option("--bash-only", is_flag=True, default=False,
-              help="Only replay bash commands (skips file ops; cannot produce correct patches).")
 @click.option("--no-patch", is_flag=True, default=False,
               help="Skip patch extraction and comparison after replay.")
 @click.option("--ramp-delay", default=0.0, show_default=True,
@@ -282,7 +280,6 @@ def run_stress_test(
     n_traj: int,
     concurrency: int | None,
     template_id: str | None,
-    bash_only: bool,
     no_patch: bool,
     ramp_delay: float,
     data_dir: str | None,
@@ -353,7 +350,6 @@ def run_stress_test(
         max_concurrent=max_concurrent,
         sandbox_timeout=cfg.sandbox_timeout,
         command_timeout=cfg.command_timeout,
-        bash_only=bash_only,
         extract_patch=not no_patch,
         ramp_up_delay_s=ramp_delay,
         results_dir=results_dir,
@@ -409,7 +405,6 @@ def run_stress_test(
         f"[bold]Stress Test Starting[/bold]\n"
         f"  Trajectories   : {total}\n"
         f"  Concurrency    : {max_concurrent}\n"
-        f"  Bash only      : {bash_only}\n"
         f"  Extract patch  : {not no_patch}\n"
         f"  Ramp delay     : {ramp_delay}s\n"
         f"  E2B API URL    : {cfg.e2b_api_url}",

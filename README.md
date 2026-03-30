@@ -6,12 +6,27 @@
 
 ```
 HuggingFace 数据集
-  nebius/SWE-rebench                     → 任务实例 (含 install_config)
-  nebius/SWE-rebench-openhands-trajectories → OpenHands Agent 执行轨迹
+  nebius/SWE-rebench                          → 任务实例 (含 install_config)
+  nebius/SWE-rebench-openhands-trajectories   → OpenHands Agent 执行轨迹
 
-         ↓ 解析轨迹中的工具调用 (bash / 文件读写)
+         ↓ 解析轨迹中的工具调用 (bash / 文件读写 / str_replace)
 
-asyncio 并发调度  →  N 个 E2B 沙箱同时回放轨迹  →  采集延迟 / 错误率 / 吞吐量
+build-templates: install_config → Dockerfile → E2B Template（缓存在 template_cache.json）
+                                                 ↓
+                              template_mapping.json 记录 instance_id → template_id
+
+run-stress-test 执行流程：
+  1. 加载 trajectories.json，解析为 SandboxOp 序列
+  2. 加载 template_mapping.json，为每条轨迹匹配 template_id
+  3. asyncio.Semaphore 限制并发 + _RampUpLimiter 错峰启动
+  4. 每条轨迹:
+     a. 创建 E2B 沙箱（失败时指数退避重试，最多 3 次）
+     b. OpExecutor 按序回放所有操作（bash / file_write / file_read / str_replace）
+     c. git diff 提取实际 patch，与轨迹中的 model_patch 语义比对
+     d. 销毁沙箱
+  5. 聚合指标 → 生成 JSON 报告
+
+  信号处理: SIGINT/SIGTERM → 优雅关停，等待活跃沙箱完成后清理
 ```
 
 ## 目录结构
@@ -26,7 +41,8 @@ swe-bench-stress/
     ├── downloader.py        # HuggingFace 数据集下载 & 缓存
     ├── template_builder.py  # 从 install_config 生成 Dockerfile / 构建 E2B template
     ├── trajectory_parser.py # 解析 OpenHands 轨迹 → SandboxOp 序列
-    └── stress_tester.py     # asyncio 并发压测引擎 & 指标聚合
+    ├── stress_tester.py     # asyncio 并发压测引擎 & 指标聚合
+    └── patch_compare.py     # 语义化 patch 比对（忽略行号/上下文/空白差异）
 ```
 
 ## 快速开始
@@ -136,7 +152,7 @@ Template ID 缓存在 `./data/template_cache.json`，相同 `install_config` 只
 ### 5. 执行压测
 
 ```bash
-# 基础压测：20 路并发，回放 50 条轨迹
+# 基础压测：20 路并发，回放 50 条轨迹（默认回放所有操作类型）
 uv run python main.py run-stress-test --n-traj 50 --concurrency 20
 
 # 指定 template，并发 50，错峰启动（每 0.1s 启动一个沙箱）
@@ -145,8 +161,8 @@ uv run python main.py run-stress-test \
   --template-id <your-template-id> \
   --ramp-delay 0.1
 
-# 回放所有操作类型（默认只回放 bash 命令）
-uv run python main.py run-stress-test --n-traj 50 --all-ops
+# 跳过 patch 提取与比对（加快速度，只关注延迟/吞吐）
+uv run python main.py run-stress-test --n-traj 50 --no-patch
 ```
 
 报告自动保存到 `./results/report_<timestamp>.json`。
@@ -175,17 +191,39 @@ uv run python main.py show-report ./results/report_20240101_120000.json
 输出示例：
 
 ```
-╭─────────────────── Stress Test Results ───────────────────╮
-│          Trajectories  50                                  │
-│        Success/Failed  48 / 2                              │
-│        Total commands  1234                                │
-│       Failed commands  12 (0%)                             │
-│       Avg trajectory   8.43s                               │
-│           Throughput   142.5 traj/min                      │
-│                                                            │
-│  Sandbox create p50/p95/p99   1.23s / 2.10s / 3.45s       │
-│  Command latency p50/p95/p99  0.18s / 1.20s / 4.50s       │
-╰────────────────────────────────────────────────────────────╯
+╭──────────────────── Stress Test Results ────────────────────╮
+│           Trajectories  50                                  │
+│       Success / Failed  48 / 2                              │
+│         Total commands  1234                                │
+│        Failed commands  12 (0%)                             │
+│        Avg trajectory   8.43s                               │
+│            Throughput   142.5 traj/min                      │
+│                                                             │
+│  Sandbox create p50/p95/p99   1.230s / 2.100s / 3.450s     │
+│  Command latency p50/p95/p99  0.180s / 1.200s / 4.500s     │
+│                                                             │
+│        Patch compared   45                                  │
+│  Patch match / mismatch 40 / 5                              │
+│       Patch match rate  88.9%                               │
+╰─────────────────────────────────────────────────────────────╯
+
+ Per-Op-Type Breakdown
+ ┌──────────────────┬───────┬────────┬─────────┬─────────┬─────────┐
+ │ Op Type          │ Count │ Failed │ p50 (s) │ p95 (s) │ p99 (s) │
+ ├──────────────────┼───────┼────────┼─────────┼─────────┼─────────┤
+ │ bash             │  980  │   10   │  0.150  │  1.100  │  4.200  │
+ │ file_str_replace │  180  │    1   │  0.030  │  0.080  │  0.120  │
+ │ file_write       │   50  │    1   │  0.025  │  0.060  │  0.090  │
+ │ file_read        │   24  │    0   │  0.020  │  0.050  │  0.070  │
+ └──────────────────┴───────┴────────┴─────────┴─────────┴─────────┘
+
+ Error Categories
+ ┌──────────────────┬───────┐
+ │ Category         │ Count │
+ ├──────────────────┼───────┤
+ │ timeout          │     1 │
+ │ connection_error │     1 │
+ └──────────────────┴───────┘
 ```
 
 ## 各模块说明
@@ -230,16 +268,32 @@ uv run python main.py show-report ./results/report_20240101_120000.json
 
 ### `src/stress_tester.py`
 
-并发控制：`asyncio.Semaphore` 限制最大活跃沙箱数，防止过载。
+核心组件：
+
+| 组件 | 职责 |
+|------|------|
+| `StressTester` | 顶层调度：信号处理、并发控制、指标聚合 |
+| `SandboxRunner` | 单条轨迹生命周期：创建沙箱（含重试）→ 回放 → 提取 patch → 销毁 |
+| `OpExecutor` | 将 `SandboxOp` 分发到 E2B 沙箱 API（bash / files.write / files.read / str_replace） |
+| `_RampUpLimiter` | Token-bucket 错峰启动，确保沙箱创建间隔不小于 `ramp_delay` |
+
+并发控制：`asyncio.Semaphore` 限制最大活跃沙箱数；沙箱创建失败时指数退避重试（最多 3 次，基础延迟 2s）。
 
 采集的指标：
 
 | 指标 | 说明 |
 |------|------|
 | `sandbox_create_s` | 沙箱创建耗时（p50/p95/p99） |
-| `command latency` | 单条命令执行耗时（p50/p95/p99） |
+| `command_latency` | 单条命令执行耗时（p50/p95/p99） |
+| `per_op_type_stats` | 按操作类型分组的 count / failed / p50 / p95 / p99 |
 | `throughput` | 轨迹吞吐量（条/分钟） |
-| `error rate` | 失败轨迹数 & 失败命令数 |
+| `error_categories` | 按类别（timeout / connection / rate_limited / server_error 等）统计的错误数 |
+| `patch_compared/matched/mismatched` | Patch 语义比对结果（通过 `src/patch_compare.py`） |
+| `timeline` | 每条轨迹的启动/完成时间偏移，用于可视化并发分布 |
+
+### `src/patch_compare.py`
+
+语义化 patch 比对：将 unified diff 解析为 `(文件路径, 删除行, 新增行)` 多重集合，忽略行号、上下文行数、尾部空白和 hunk 顺序差异。用于验证沙箱回放是否产生与原始 Agent 执行相同的代码变更。
 
 ## CLI 参数速查
 
@@ -260,11 +314,11 @@ uv run python main.py build-templates
   --data-dir PATH
 
 uv run python main.py run-stress-test
-  --n-traj INT           轨迹数量
-  --concurrency INT      最大并发沙箱数
+  --n-traj INT           轨迹数量（0 = 全部已下载）
+  --concurrency INT      最大并发沙箱数（默认读配置）
   --template-id STR      覆盖所有沙箱的 template ID
-  --all-ops              回放所有操作（默认仅 bash）
-  --ramp-delay FLOAT     错峰启动间隔（秒）
+  --no-patch             跳过 patch 提取与比对
+  --ramp-delay FLOAT     错峰启动间隔（秒，默认 0）
   --data-dir PATH
   --results-dir PATH
 

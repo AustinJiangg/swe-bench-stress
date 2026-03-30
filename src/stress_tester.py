@@ -566,6 +566,27 @@ class StressTestConfig:
     results_dir: str = "./results"
 
 
+def _patch_sandbox_protocol():
+    """Monkey-patch the E2B SDK to use http instead of https for sandbox URLs.
+
+    Self-hosted E2B instances typically don't terminate TLS on the sandbox
+    data-plane.  The SDK hard-codes ``https`` for non-debug mode, so we
+    patch ``ConnectionConfig.get_sandbox_url`` to use ``http``.
+    """
+    from e2b.connection_config import ConnectionConfig
+
+    _original = ConnectionConfig.get_sandbox_url
+
+    def _http_sandbox_url(self, sandbox_id: str, sandbox_domain: str) -> str:
+        url = _original(self, sandbox_id, sandbox_domain)
+        if url.startswith("https://"):
+            url = "http://" + url[len("https://"):]
+        return url
+
+    ConnectionConfig.get_sandbox_url = _http_sandbox_url  # type: ignore[assignment]
+    logger.info("Patched E2B SDK to use http for sandbox connections")
+
+
 # --------------------------------------------------------------------------- #
 #  Stress tester orchestrator                                                   #
 # --------------------------------------------------------------------------- #
@@ -608,6 +629,11 @@ class StressTester:
         cfg = self.cfg
         os.environ.setdefault("E2B_API_KEY", cfg.api_key)
         os.environ.setdefault("E2B_API_URL", cfg.api_url)
+
+        # If the E2B API URL uses http (self-hosted), patch the SDK to also
+        # use http for sandbox data-plane connections instead of https.
+        if cfg.api_url.startswith("http://"):
+            _patch_sandbox_protocol()
 
         sem = asyncio.Semaphore(cfg.max_concurrent)
         limiter = _RampUpLimiter(cfg.ramp_up_delay_s)

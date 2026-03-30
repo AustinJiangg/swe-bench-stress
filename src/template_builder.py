@@ -343,12 +343,15 @@ class E2BTemplateBuilder:
             # Build with local tag
             build_cmd = ["docker", "build", "-t", local_tag, "-f", str(df_path), tmpdir]
             logger.info("Running: %s", " ".join(build_cmd))
-            proc = subprocess.run(
-                build_cmd, capture_output=True, text=True,
+            proc = subprocess.Popen(
+                build_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
+            for line in proc.stdout:
+                logger.info("[docker build] %s", line.rstrip())
+            proc.wait()
             if proc.returncode != 0:
                 raise RuntimeError(
-                    f"docker build failed (exit {proc.returncode}):\n{proc.stderr}"
+                    f"docker build failed (exit {proc.returncode})"
                 )
             logger.info("Docker image built successfully: %s", local_tag)
 
@@ -380,10 +383,15 @@ class E2BTemplateBuilder:
         # Push
         push_cmd = ["docker", "push", image_ref]
         logger.info("Pushing image: %s", image_ref)
-        proc = subprocess.run(push_cmd, capture_output=True, text=True)
+        proc = subprocess.Popen(
+            push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for line in proc.stdout:
+            logger.info("[docker push] %s", line.rstrip())
+        proc.wait()
         if proc.returncode != 0:
             raise RuntimeError(
-                f"docker push failed (exit {proc.returncode}):\n{proc.stderr}"
+                f"docker push failed (exit {proc.returncode})"
             )
         logger.info("Image pushed successfully: %s", image_ref)
 

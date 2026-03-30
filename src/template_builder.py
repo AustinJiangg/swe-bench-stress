@@ -284,15 +284,20 @@ class E2BTemplateBuilder:
         return f"{name_prefix}-{fp}"
 
     def get_or_build(self, group: dict, name_prefix: str = "swe") -> str:
-        fp = fingerprint_install_config(group["config"], group["repo"], group["base_commit"])
+        # Generate Dockerfile first so we can fingerprint the actual build content.
+        # This ensures any config change (base_image, proxy, etc.) invalidates the cache.
+        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
+        fp = hashlib.sha256(dockerfile.encode()).hexdigest()[:16]
+
         cached = self.cache.get(fp)
         if cached:
             logger.info("Template cache hit: %s -> %s", fp, cached)
             return cached
 
-        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
-        template_name = self._make_image_name(name_prefix, group["repo"], fp)
-        logger.info("Building new template: %s", template_name)
+        # Use repo-based prefix for a readable image name
+        repo_fp = fingerprint_install_config(group["config"], group["repo"], group["base_commit"])
+        template_name = self._make_image_name(name_prefix, group["repo"], repo_fp)
+        logger.info("Building new template: %s (dockerfile fingerprint: %s)", template_name, fp)
 
         # Step 1: Build Docker image and push to private registry
         image_ref = self._build_and_push_image(dockerfile, template_name)
@@ -343,12 +348,15 @@ class E2BTemplateBuilder:
             # Build with local tag
             build_cmd = ["docker", "build", "-t", local_tag, "-f", str(df_path), tmpdir]
             logger.info("Running: %s", " ".join(build_cmd))
-            proc = subprocess.run(
-                build_cmd, capture_output=True, text=True,
+            proc = subprocess.Popen(
+                build_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
+            for line in proc.stdout:
+                logger.info("[docker build] %s", line.rstrip())
+            proc.wait()
             if proc.returncode != 0:
                 raise RuntimeError(
-                    f"docker build failed (exit {proc.returncode}):\n{proc.stderr}"
+                    f"docker build failed (exit {proc.returncode})"
                 )
             logger.info("Docker image built successfully: %s", local_tag)
 
@@ -380,10 +388,15 @@ class E2BTemplateBuilder:
         # Push
         push_cmd = ["docker", "push", image_ref]
         logger.info("Pushing image: %s", image_ref)
-        proc = subprocess.run(push_cmd, capture_output=True, text=True)
+        proc = subprocess.Popen(
+            push_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for line in proc.stdout:
+            logger.info("[docker push] %s", line.rstrip())
+        proc.wait()
         if proc.returncode != 0:
             raise RuntimeError(
-                f"docker push failed (exit {proc.returncode}):\n{proc.stderr}"
+                f"docker push failed (exit {proc.returncode})"
             )
         logger.info("Image pushed successfully: %s", image_ref)
 

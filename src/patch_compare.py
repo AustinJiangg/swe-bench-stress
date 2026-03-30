@@ -15,19 +15,21 @@ produces the same code changes as the original agent execution.
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 
-def normalize_patch(patch_text: str) -> frozenset[tuple[str, str, str]]:
+def normalize_patch(patch_text: str) -> Counter[tuple[str, str, str]]:
     """
-    Parse a unified diff into a canonical set of (filepath, removed, added) tuples.
+    Parse a unified diff into a multiset of (filepath, removed, added) tuples.
 
     Each tuple represents one hunk's net changes with context stripped and
     trailing whitespace normalised on each line.
 
-    Returns a frozenset so comparison is order-independent.
+    Returns a Counter (multiset) so comparison is order-independent but
+    preserves duplicate hunk counts.
     """
     if not patch_text or not patch_text.strip():
-        return frozenset()
+        return Counter()
 
     changes: list[tuple[str, str, str]] = []
 
@@ -73,7 +75,7 @@ def normalize_patch(patch_text: str) -> frozenset[tuple[str, str, str]]:
             if removed or added:
                 changes.append((filepath, removed, added))
 
-    return frozenset(changes)
+    return Counter(changes)
 
 
 def patches_match(expected: str, actual: str) -> bool:

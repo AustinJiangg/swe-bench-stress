@@ -336,7 +336,17 @@ class OpExecutor:
 
     async def _exec_str_replace(self, op, t_start: float) -> CommandResult:
         existing = await self._sandbox.files.read(op.path)
-        updated = (existing or "").replace(op.old_str, op.new_str, 1)
+        if op.insert_line >= 0:
+            # Insert new_str after the specified line number
+            lines = (existing or "").splitlines(keepends=True)
+            idx = min(op.insert_line, len(lines))
+            insert_text = op.new_str
+            if insert_text and not insert_text.endswith("\n"):
+                insert_text += "\n"
+            lines.insert(idx, insert_text)
+            updated = "".join(lines)
+        else:
+            updated = (existing or "").replace(op.old_str, op.new_str, 1)
         await self._sandbox.files.write(op.path, updated)
         return CommandResult(
             op_type=op.op_type.value,

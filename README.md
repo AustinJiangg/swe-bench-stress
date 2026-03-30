@@ -34,7 +34,7 @@ run-stress-test 执行流程：
 ```
 swe-bench-stress/
 ├── main.py                  # CLI 入口（4 个子命令）
-├── config.py                # pydantic-settings 配置（读 .env）
+├── config.py                # pydantic-settings 类型定义（默认值统一在 .env）
 ├── requirements.txt
 ├── .env.example             # 环境变量模板
 └── src/
@@ -71,30 +71,28 @@ uv sync
 
 ```bash
 cp .env.example .env
+# 编辑 .env，填入实际值（所有配置项及默认值见 .env.example）
 ```
 
 配置值的优先级（从高到低）：
 
 ```
-CLI 参数 > 环境变量 (export) > .env 文件 > config.py Field default
+CLI 参数 > 环境变量 (export) > .env 文件
 ```
 
-编辑 `.env`：
+`.env.example` 是所有配置的唯一默认值来源，`config.py` 仅定义类型和变量名。关键配置项：
 
-```dotenv
-E2B_API_KEY=your-api-key
-E2B_API_URL=http://localhost:3000          # 自部署 E2B 地址
-E2B_BASE_IMAGE=ubuntu:22.04-swe-base
-E2B_TEMPLATE_CPU_COUNT=1                   # Template.build(cpu_count)
-E2B_TEMPLATE_MEMORY_MB=1024                # Template.build(memory_mb)
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `E2B_API_KEY` | `your-api-key-here` | E2B API 密钥 |
+| `E2B_API_URL` | `http://localhost:3000` | 自部署 E2B 地址 |
+| `MAX_CONCURRENT_SANDBOXES` | `10` | 最大并发沙箱数 |
+| `SANDBOX_TIMEOUT` | `300` | 单个沙箱生命周期（秒） |
+| `COMMAND_TIMEOUT` | `60` | 单条命令超时（秒） |
+| `N_TASKS` | `100` | 下载任务数（0 = 全部） |
+| `N_TRAJECTORIES` | `50` | 下载轨迹数（0 = 全部） |
 
-MAX_CONCURRENT_SANDBOXES=20          # 最大并发沙箱数
-SANDBOX_TIMEOUT=300                  # 单个沙箱生命周期（秒）
-COMMAND_TIMEOUT=60                   # 单条命令超时（秒）
-
-N_TASKS=200                          # 下载任务数（0 = 全部）
-N_TRAJECTORIES=100                   # 下载轨迹数（0 = 全部）
-```
+完整配置项列表见 [`.env.example`](.env.example)。
 
 ### 3. 下载数据集
 

@@ -54,6 +54,7 @@ class SandboxOp:
     content: str = ""
     old_str: str = ""
     new_str: str = ""
+    insert_line: int = -1       # >=0 means insert new_str after this line number
     # metadata
     tool_call_id: str = ""
     raw_args: dict = field(default_factory=dict)
@@ -78,6 +79,7 @@ class ParsedTrajectory:
     raw_messages: list[dict]
     n_assistant_turns: int
     n_tool_calls: int
+    model_patch: str = ""           # expected patch from trajectory data
 
 
 # --------------------------------------------------------------------------- #
@@ -166,6 +168,21 @@ def _extract_str_replace(args: dict) -> SandboxOp:
     if command == "create":
         content = args.get("file_text") or args.get("content") or ""
         return SandboxOp(op_type=OpType.FILE_WRITE, path=str(path), content=str(content), raw_args=args)
+    if command == "insert":
+        # Insert new_str after the specified line number
+        new_str = args.get("new_str") or args.get("new_string") or ""
+        raw_line = args.get("insert_line") or args.get("line") or args.get("line_number") or 0
+        try:
+            insert_line = int(raw_line)
+        except (ValueError, TypeError):
+            insert_line = 0
+        return SandboxOp(
+            op_type=OpType.FILE_STR_REPLACE,
+            path=str(path),
+            new_str=str(new_str),
+            insert_line=insert_line,
+            raw_args=args,
+        )
     old_str = args.get("old_str") or args.get("old_string") or ""
     new_str = args.get("new_str") or args.get("new_string") or ""
     return SandboxOp(
@@ -247,6 +264,7 @@ class TrajectoryParser:
     def parse(self, row: dict) -> ParsedTrajectory:
         """Parse a single trajectory row from the HuggingFace dataset."""
         instance_id = row.get("instance_id") or row.get("id") or "unknown"
+        model_patch = row.get("model_patch") or row.get("git_patch") or ""
         raw_messages = [_clean_message(m) for m in (row.get("trajectory") or [])]
 
         ops: list[SandboxOp] = []
@@ -280,6 +298,7 @@ class TrajectoryParser:
             raw_messages=raw_messages,
             n_assistant_turns=n_assistant,
             n_tool_calls=n_tool_calls,
+            model_patch=model_patch,
         )
 
     def parse_many(self, rows: list[dict]) -> list[ParsedTrajectory]:

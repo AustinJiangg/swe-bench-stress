@@ -270,8 +270,8 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
               help="Max concurrent sandboxes (default from config).")
 @click.option("--template-id", default=None,
               help="Override template ID for all sandboxes.")
-@click.option("--all-ops", is_flag=True,
-              help="Replay all op types (default: bash only).")
+@click.option("--no-patch", is_flag=True, default=False,
+              help="Skip patch extraction and comparison after replay.")
 @click.option("--ramp-delay", default=0.0, show_default=True,
               help="Seconds between successive sandbox launches (ramp-up).")
 @click.option("--data-dir", default=None)
@@ -280,16 +280,17 @@ def run_stress_test(
     n_traj: int,
     concurrency: int | None,
     template_id: str | None,
-    all_ops: bool,
+    no_patch: bool,
     ramp_delay: float,
     data_dir: str | None,
     results_dir: str | None,
 ):
     """Replay trajectories concurrently in E2B sandboxes and collect metrics."""
     from config import Config
-    from src.downloader import DatasetDownloader
     from src.trajectory_parser import TrajectoryParser
-    from src.stress_tester import StressTester, StressTestConfig
+    from src.stress_tester import (
+        StressTester, StressTestConfig, EventType, ProgressEvent,
+    )
 
     cfg = Config()
     data_dir = data_dir or cfg.data_dir
@@ -331,13 +332,15 @@ def run_stress_test(
             template_mapping = json.load(f)
         console.print(f"Loaded template mapping with {len(template_mapping)} entries")
 
-    # ---- resolve template ID
-    effective_template = template_id or cfg.e2b_api_url  # fallback: use base sandbox
     if not template_mapping and not template_id:
         console.print(
-            "[yellow]No template mapping found. Using API URL as template ID. "
-            "Run `build-templates` for proper isolation.[/]"
+            "[yellow]No template mapping and no --template-id. "
+            "Falling back to 'base'. Run `build-templates` for proper isolation.[/]"
         )
+
+    # ---- set E2B env vars before entering asyncio
+    os.environ.setdefault("E2B_API_KEY", cfg.e2b_api_key)
+    os.environ.setdefault("E2B_API_URL", cfg.e2b_api_url)
 
     # ---- configure stress test
     stress_cfg = StressTestConfig(
@@ -347,27 +350,79 @@ def run_stress_test(
         max_concurrent=max_concurrent,
         sandbox_timeout=cfg.sandbox_timeout,
         command_timeout=cfg.command_timeout,
-        bash_only=not all_ops,
+        extract_patch=not no_patch,
         ramp_up_delay_s=ramp_delay,
         results_dir=results_dir,
     )
 
-    # ---- run
+    # ---- set up real-time progress display
+    from rich.live import Live
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+
+    total = len(parsed)
+    counters = {"done": 0, "ok": 0, "fail": 0, "active": 0}
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=40),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("[green]{task.fields[ok]}[/] ok  [red]{task.fields[fail]}[/] fail  [cyan]{task.fields[active]}[/] active"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    task_id = progress.add_task(
+        f"Stress Test ({total} traj, c={max_concurrent})",
+        total=total, ok=0, fail=0, active=0,
+    )
+
+    def on_progress(event: ProgressEvent):
+        if event.event_type == EventType.SANDBOX_CREATING:
+            counters["active"] += 1
+        elif event.event_type == EventType.TRAJECTORY_DONE:
+            counters["done"] += 1
+            counters["ok"] += 1
+            counters["active"] = max(0, counters["active"] - 1)
+        elif event.event_type == EventType.TRAJECTORY_ERROR:
+            counters["done"] += 1
+            counters["fail"] += 1
+            counters["active"] = max(0, counters["active"] - 1)
+        elif event.event_type == EventType.SHUTDOWN:
+            progress.update(task_id, description="[bold yellow]Shutting down...")
+            return
+        progress.update(
+            task_id,
+            completed=counters["done"],
+            ok=counters["ok"],
+            fail=counters["fail"],
+            active=counters["active"],
+        )
+
     tester = StressTester(stress_cfg)
+    tester.set_progress_callback(on_progress)
 
     console.print(Panel(
         f"[bold]Stress Test Starting[/bold]\n"
-        f"  Trajectories : {len(parsed)}\n"
-        f"  Concurrency  : {max_concurrent}\n"
-        f"  Bash only    : {not all_ops}\n"
-        f"  Ramp delay   : {ramp_delay}s\n"
-        f"  E2B API URL  : {cfg.e2b_api_url}",
+        f"  Trajectories   : {total}\n"
+        f"  Concurrency    : {max_concurrent}\n"
+        f"  Extract patch  : {not no_patch}\n"
+        f"  Ramp delay     : {ramp_delay}s\n"
+        f"  E2B API URL    : {cfg.e2b_api_url}",
         title="Config",
         border_style="cyan",
     ))
 
-    with console.status(f"[bold cyan]Running {len(parsed)} trajectories (concurrency={max_concurrent})..."):
-        report = asyncio.run(tester.run(parsed, template_mapping or None))
+    # ---- run with live progress
+    async def _run():
+        return await tester.run(parsed, template_mapping or None)
+
+    try:
+        with Live(progress, console=console, refresh_per_second=4):
+            report = asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted. Cleaning up sandboxes...[/]")
+        asyncio.run(tester.shutdown())
+        sys.exit(130)
 
     # ---- save report
     Path(results_dir).mkdir(parents=True, exist_ok=True)
@@ -380,8 +435,7 @@ def run_stress_test(
 
 
 def _print_report(report):
-    from src.stress_tester import StressTestReport
-
+    """Print a comprehensive stress test summary."""
     grid = Table.grid(expand=False, padding=(0, 2))
     grid.add_column(style="bold cyan", justify="right")
     grid.add_column()
@@ -392,9 +446,10 @@ def _print_report(report):
         f"[green]{report.successful_trajectories}[/] / [red]{report.failed_trajectories}[/]",
     )
     grid.add_row("Total commands", str(report.total_commands))
+    total_cmds = max(report.total_commands, 1)
     grid.add_row(
         "Failed commands",
-        f"[red]{report.failed_commands}[/] ({100*report.failed_commands//max(report.total_commands,1)}%)",
+        f"[red]{report.failed_commands}[/] ({100 * report.failed_commands // total_cmds}%)",
     )
     grid.add_row("Avg trajectory", f"{report.avg_trajectory_s:.2f}s")
     grid.add_row("Throughput", f"{report.throughput_traj_per_min:.1f} traj/min")
@@ -404,7 +459,52 @@ def _print_report(report):
     grid.add_row("Command latency p50/p95/p99",
                  f"{report.p50_cmd_s:.3f}s / {report.p95_cmd_s:.3f}s / {report.p99_cmd_s:.3f}s")
 
+    # Patch validation results
+    patch_compared = getattr(report, "patch_compared", 0)
+    patch_matched = getattr(report, "patch_matched", 0)
+    patch_mismatched = getattr(report, "patch_mismatched", 0)
+    if patch_compared > 0:
+        grid.add_row("", "")
+        grid.add_row("Patch compared", str(patch_compared))
+        grid.add_row(
+            "Patch match / mismatch",
+            f"[green]{patch_matched}[/] / [red]{patch_mismatched}[/]",
+        )
+        match_rate = 100 * patch_matched / max(patch_compared, 1)
+        grid.add_row("Patch match rate", f"[{'green' if match_rate > 80 else 'yellow' if match_rate > 50 else 'red'}]{match_rate:.1f}%[/]")
+
     console.print(Panel(grid, title="[bold]Stress Test Results[/bold]", border_style="green"))
+
+    # ---- per-op-type breakdown
+    op_stats = getattr(report, "per_op_type_stats", None) or {}
+    if op_stats:
+        t = Table(title="Per-Op-Type Breakdown", show_lines=False, padding=(0, 1))
+        t.add_column("Op Type", style="bold")
+        t.add_column("Count", justify="right")
+        t.add_column("Failed", justify="right", style="red")
+        t.add_column("p50 (s)", justify="right")
+        t.add_column("p95 (s)", justify="right")
+        t.add_column("p99 (s)", justify="right")
+        for op_type, stats in sorted(op_stats.items()):
+            t.add_row(
+                op_type,
+                str(stats.get("count", 0)),
+                str(stats.get("failed", 0)),
+                f"{stats.get('p50_s', 0):.3f}",
+                f"{stats.get('p95_s', 0):.3f}",
+                f"{stats.get('p99_s', 0):.3f}",
+            )
+        console.print(t)
+
+    # ---- error categories
+    err_cats = getattr(report, "error_categories", None) or {}
+    if err_cats:
+        t = Table(title="Error Categories", show_lines=False, padding=(0, 1))
+        t.add_column("Category", style="bold red")
+        t.add_column("Count", justify="right")
+        for cat, count in sorted(err_cats.items(), key=lambda x: -x[1]):
+            t.add_row(cat, str(count))
+        console.print(t)
 
 
 # ===========================================================================
@@ -418,19 +518,12 @@ def show_report(report_path: str):
     with open(report_path) as f:
         data = json.load(f)
 
-    from src.stress_tester import StressTestReport, SandboxResult
-    # Reconstruct minimal report for display
-    class _FakeReport:
-        pass
-    r = _FakeReport()
-    for k, v in data.items():
-        if k != "sandbox_results":
-            setattr(r, k, v)
+    from src.stress_tester import StressTestReport
+    report = StressTestReport.from_dict(data)
+    _print_report(report)
 
-    _print_report(r)
-
-    # Per-sandbox table
-    rows = data.get("sandbox_results", [])
+    # Per-sandbox table from raw summary dicts
+    rows = getattr(report, "_sandbox_summaries", [])
     if rows:
         t = Table(title="Per-Sandbox Summary", show_lines=False)
         t.add_column("instance_id", style="dim", max_width=40)
@@ -452,6 +545,8 @@ def show_report(report_path: str):
                 (row.get("error") or "")[:40],
             )
         console.print(t)
+        if len(rows) > 50:
+            console.print(f"  [dim]... and {len(rows) - 50} more (see full report JSON)[/]")
 
 
 # ===========================================================================

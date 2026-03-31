@@ -201,12 +201,12 @@ def _now_iso() -> str:
 
 
 # --------------------------------------------------------------------------- #
-#  Path remapping                                                               #
+#  Workspace path detection                                                     #
 # --------------------------------------------------------------------------- #
 
 # OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths,
 # but E2B templates clone repos into /testbed.  We detect the workspace prefix
-# from the operations and rewrite it to /testbed.
+# and create a symlink so all ops work with their original paths.
 _WORKSPACE_RE = re.compile(r"/workspace/[A-Za-z0-9_.~-]+__[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)?")
 
 
@@ -220,21 +220,6 @@ def _detect_workspace_prefix(ops) -> str | None:
             if m:
                 return m.group(0)
     return None
-
-
-def _remap_op_paths(ops, src_prefix: str, dst_prefix: str = "/testbed"):
-    """Rewrite *src_prefix* → *dst_prefix* in every op's path and command fields."""
-    for op in ops:
-        if op.path:
-            op.path = op.path.replace(src_prefix, dst_prefix)
-        if op.command:
-            op.command = op.command.replace(src_prefix, dst_prefix)
-        if op.old_str:
-            op.old_str = op.old_str.replace(src_prefix, dst_prefix)
-        if op.new_str:
-            op.new_str = op.new_str.replace(src_prefix, dst_prefix)
-        if op.content:
-            op.content = op.content.replace(src_prefix, dst_prefix)
 
 
 def _categorize_error(error: str) -> str:
@@ -463,14 +448,17 @@ class SandboxRunner:
                 detail=f"created in {create_time:.2f}s",
             )
 
-            # ---- remap workspace paths to /testbed
+            # ---- symlink workspace path to /testbed so ops work as-is
             ws_prefix = _detect_workspace_prefix(ops)
             if ws_prefix:
                 logger.info(
-                    "[%s] Remapping paths: %s -> /testbed",
+                    "[%s] Creating symlink: %s -> /testbed",
                     instance_id, ws_prefix,
                 )
-                _remap_op_paths(ops, ws_prefix, "/testbed")
+                await sandbox.commands.run(
+                    f"mkdir -p $(dirname {ws_prefix}) && ln -s /testbed {ws_prefix}",
+                    user="root",
+                )
 
             # ---- replay ops
             total_ops = len(ops)
@@ -506,7 +494,8 @@ class SandboxRunner:
                 try:
                     diff_result = await asyncio.wait_for(
                         sandbox.commands.run(
-                            "cd /testbed && git add -A && git diff --cached HEAD"
+                            "cd /testbed && git add -A && git diff --cached HEAD",
+                            user="root",
                         ),
                         timeout=30,
                     )

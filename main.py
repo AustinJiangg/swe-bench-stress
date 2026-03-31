@@ -274,6 +274,8 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
               help="Skip patch extraction and comparison after replay.")
 @click.option("--ramp-delay", default=0.0, show_default=True,
               help="Seconds between successive sandbox launches (ramp-up).")
+@click.option("--verbose-ops", is_flag=True, default=False,
+              help="Log every operation as it executes (useful for debugging single trajectories).")
 @click.option("--data-dir", default=None)
 @click.option("--results-dir", default=None)
 def run_stress_test(
@@ -282,6 +284,7 @@ def run_stress_test(
     template_id: str | None,
     no_patch: bool,
     ramp_delay: float,
+    verbose_ops: bool,
     data_dir: str | None,
     results_dir: str | None,
 ):
@@ -353,6 +356,7 @@ def run_stress_test(
         extract_patch=not no_patch,
         ramp_up_delay_s=ramp_delay,
         results_dir=results_dir,
+        verbose_ops=verbose_ops,
     )
 
     # ---- set up real-time progress display

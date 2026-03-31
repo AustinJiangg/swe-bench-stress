@@ -32,8 +32,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import re
-
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -198,27 +196,6 @@ def _percentiles(data: list[float]) -> dict[str, float]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-# --------------------------------------------------------------------------- #
-#  Workspace path detection                                                     #
-# --------------------------------------------------------------------------- #
-
-# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths.
-# Used to locate the git repo for patch extraction after replay.
-_WORKSPACE_RE = re.compile(r"/workspace/[A-Za-z0-9_.~-]+__[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)?")
-
-
-def _detect_workspace_prefix(ops) -> str | None:
-    """Scan ops for the first /workspace/{slug} path and return it."""
-    for op in ops:
-        for field in (op.path, op.command):
-            if not field:
-                continue
-            m = _WORKSPACE_RE.search(field)
-            if m:
-                return m.group(0)
-    return None
 
 
 def _categorize_error(error: str) -> str:
@@ -420,6 +397,7 @@ class SandboxRunner:
         template_id: str,
         test_start_mono: float,
         model_patch: str = "",
+        workspace_path: str = "",
     ) -> SandboxResult:
         """Create one sandbox, replay ops, extract patch, compare, destroy."""
         from src.trajectory_parser import OpType
@@ -479,8 +457,7 @@ class SandboxRunner:
             # ---- extract actual patch via git diff
             if self._cfg.extract_patch and not self._shutdown_event.is_set():
                 try:
-                    # Find the repo dir from ops (workspace path) or fall back
-                    repo_dir = _detect_workspace_prefix(ops) or "/testbed"
+                    repo_dir = workspace_path or "/testbed"
                     diff_result = await asyncio.wait_for(
                         sandbox.commands.run(
                             f"cd {repo_dir} && git add -A && git diff --cached HEAD",
@@ -719,6 +696,7 @@ class StressTester:
                     template_id=tid,
                     test_start_mono=t_start,
                     model_patch=getattr(pt, "model_patch", ""),
+                    workspace_path=getattr(pt, "workspace_path", ""),
                 )
 
         tasks = [asyncio.create_task(run_one(pt)) for pt in parsed_trajectories]

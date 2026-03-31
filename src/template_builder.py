@@ -41,15 +41,20 @@ CONDA_TOS = (
 
 
 def workspace_path_for_task(task: dict) -> str:
-    """Return the workspace path OpenHands would use for this task.
+    """Return the workspace path for this task.
 
-    Format: /workspace/{owner}__{repo}__{version}
-    Example: /workspace/PlasmaFAIR__sdf-xarray__unknown
+    Priority:
+    1. Explicit ``workspace_path`` key (set from parsed trajectory data).
+    2. Fallback: /workspace/{repo_last_part}  (matches latest OpenHands convention).
     """
+    # Prefer explicit path extracted from the trajectory
+    explicit = task.get("workspace_path", "")
+    if explicit:
+        return explicit
+    # Fallback
     repo = task.get("repo", "")
-    version = task.get("version") or "unknown"
-    repo_slug = repo.replace("/", "__")
-    return f"/workspace/{repo_slug}__{version}"
+    repo_name = repo.split("/")[-1] if repo else "repo"
+    return f"/workspace/{repo_name}"
 
 
 def _printf_file(content: str, dest: str) -> str:

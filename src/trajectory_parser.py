@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -80,6 +81,7 @@ class ParsedTrajectory:
     n_assistant_turns: int
     n_tool_calls: int
     model_patch: str = ""           # expected patch from trajectory data
+    workspace_path: str = ""        # e.g. /workspace/sdf-xarray, detected from ops
 
 
 # --------------------------------------------------------------------------- #
@@ -255,6 +257,39 @@ def _clean_message(msg: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+#  Workspace path detection                                                     #
+# --------------------------------------------------------------------------- #
+
+# Match /workspace/{subdir} where subdir contains at least one letter.
+# Covers all known formats:
+#   /workspace/sdf-xarray
+#   /workspace/PlasmaFAIR__sdf-xarray__unknown
+#   /workspace/django__django__5.0
+_WORKSPACE_PATH_RE = re.compile(r"/workspace/([A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)*)")
+
+
+def _detect_workspace_path(ops: list[SandboxOp]) -> str:
+    """Extract the workspace path from ops (e.g. /workspace/sdf-xarray).
+
+    Scans file paths first (most reliable), then bash commands.
+    Returns empty string if not found.
+    """
+    # Scan file paths first — they are clean, unambiguous
+    for op in ops:
+        if op.path:
+            m = _WORKSPACE_PATH_RE.match(op.path)
+            if m:
+                return m.group(0)
+    # Fall back to bash commands
+    for op in ops:
+        if op.command:
+            m = _WORKSPACE_PATH_RE.search(op.command)
+            if m:
+                return m.group(0)
+    return ""
+
+
+# --------------------------------------------------------------------------- #
 #  Main parser                                                                  #
 # --------------------------------------------------------------------------- #
 
@@ -299,6 +334,7 @@ class TrajectoryParser:
             n_assistant_turns=n_assistant,
             n_tool_calls=n_tool_calls,
             model_patch=model_patch,
+            workspace_path=_detect_workspace_path(ops),
         )
 
     def parse_many(self, rows: list[dict]) -> list[ParsedTrajectory]:

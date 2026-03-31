@@ -190,10 +190,20 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
     if for_trajectories:
         trajs_path = Path(data_dir) / "trajectories.json"
         if trajs_path.exists():
+            from src.trajectory_parser import TrajectoryParser
             with open(trajs_path) as f:
                 trajs = json.load(f)
-            traj_ids = {t.get("instance_id") for t in trajs}
+            # Parse trajectories to extract workspace paths
+            parser = TrajectoryParser()
+            parsed_trajs = parser.parse_many(trajs)
+            traj_ws = {pt.instance_id: pt.workspace_path for pt in parsed_trajs}
+            traj_ids = set(traj_ws.keys())
             tasks = [t for t in tasks if t.get("instance_id") in traj_ids]
+            # Inject workspace_path from trajectory into each task
+            for t in tasks:
+                ws = traj_ws.get(t.get("instance_id", ""), "")
+                if ws:
+                    t["workspace_path"] = ws
             console.print(f"Filtered to {len(tasks)} tasks matching trajectories")
         else:
             console.print("[yellow]No trajectories.json found, building for all tasks[/]")

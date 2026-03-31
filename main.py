@@ -171,7 +171,6 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
     from src.template_builder import (
         E2BTemplateBuilder,
         generate_dockerfile,
-        group_tasks_by_config,
     )
 
     cfg = Config()
@@ -199,36 +198,25 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
         else:
             console.print("[yellow]No trajectories.json found, building for all tasks[/]")
 
-    # ---- group by install_config
-    groups = group_tasks_by_config(tasks)
     console.print(
-        f"Processing {len(tasks)} tasks → "
-        f"[bold]{len(groups)}[/] unique install_configs, "
-        f"strategy=[bold]{strategy}[/]"
+        f"Processing {len(tasks)} tasks, strategy=[bold]{strategy}[/]"
     )
-    for fp, g in groups.items():
-        console.print(
-            f"  {fp}  python={g['python'] or '?':6s}  "
-            f"repo={g['repo'] or '(none)':30s}  "
-            f"commit={g['base_commit'][:8] if g['base_commit'] else '?':8s}  "
-            f"tasks={len(g['tasks'])}"
-        )
+    for t in tasks[:20]:  # show first 20
+        iid = t.get("instance_id", "?")
+        repo = t.get("repo", "?")
+        commit = (t.get("base_commit") or "?")[:8]
+        console.print(f"  {iid}  repo={repo}  commit={commit}")
+    if len(tasks) > 20:
+        console.print(f"  ... and {len(tasks) - 20} more")
 
     if export_dockerfiles:
         df_dir = Path("./dockerfiles")
         df_dir.mkdir(exist_ok=True)
-        for fp, g in groups.items():
-            instance = {
-                "install_config": g["config"],
-                "repo": g["repo"],
-                "base_commit": g["base_commit"],
-                "environment_setup_commit": g.get("environment_setup_commit", g["base_commit"]),
-                "environment": g.get("environment", ""),
-                "requirements": g.get("requirements", ""),
-            }
-            df = generate_dockerfile(instance, cfg.e2b_base_image)
-            (df_dir / f"{fp}.Dockerfile").write_text(df)
-        console.print(f"[green]✓[/] Exported {len(groups)} unique Dockerfiles to ./dockerfiles/")
+        for t in tasks:
+            iid = t.get("instance_id", "unknown")
+            df = generate_dockerfile(t, cfg.e2b_base_image)
+            (df_dir / f"{iid}.Dockerfile").write_text(df)
+        console.print(f"[green]✓[/] Exported {len(tasks)} Dockerfiles to ./dockerfiles/")
         return
 
     # Expose config values as env vars for the E2B SDK
@@ -250,7 +238,7 @@ def build_templates(n_tasks: int, strategy: str, export_dockerfiles: bool,
     mapping = builder.get_or_build_batch(tasks, name_prefix="swe")
 
     built = sum(1 for v in mapping.values() if v)
-    console.print(f"[green]✓[/] Templates ready: {built}/{len(tasks)} ({len(groups)} unique images)")
+    console.print(f"[green]✓[/] Templates ready: {built}/{len(tasks)}")
 
     # Save mapping
     mapping_path = Path(data_dir) / "template_mapping.json"

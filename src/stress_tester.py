@@ -201,12 +201,11 @@ def _now_iso() -> str:
 
 
 # --------------------------------------------------------------------------- #
-#  Path remapping                                                               #
+#  Workspace path detection                                                     #
 # --------------------------------------------------------------------------- #
 
-# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths,
-# but E2B templates clone repos into /testbed.  We detect the workspace prefix
-# from the operations and rewrite it to /testbed.
+# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths.
+# Used to locate the git repo for patch extraction after replay.
 _WORKSPACE_RE = re.compile(r"/workspace/[A-Za-z0-9_.~-]+__[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)?")
 
 
@@ -220,21 +219,6 @@ def _detect_workspace_prefix(ops) -> str | None:
             if m:
                 return m.group(0)
     return None
-
-
-def _remap_op_paths(ops, src_prefix: str, dst_prefix: str = "/testbed"):
-    """Rewrite *src_prefix* → *dst_prefix* in every op's path and command fields."""
-    for op in ops:
-        if op.path:
-            op.path = op.path.replace(src_prefix, dst_prefix)
-        if op.command:
-            op.command = op.command.replace(src_prefix, dst_prefix)
-        if op.old_str:
-            op.old_str = op.old_str.replace(src_prefix, dst_prefix)
-        if op.new_str:
-            op.new_str = op.new_str.replace(src_prefix, dst_prefix)
-        if op.content:
-            op.content = op.content.replace(src_prefix, dst_prefix)
 
 
 def _categorize_error(error: str) -> str:
@@ -299,6 +283,7 @@ class OpExecutor:
     def __init__(self, sandbox, command_timeout: int):
         self._sandbox = sandbox
         self._command_timeout = command_timeout
+        self._user: str | None = None  # set to "root" for OpenHands trajectories
 
     async def execute(self, op) -> CommandResult | None:
         """Dispatch to the appropriate handler based on op_type."""
@@ -340,7 +325,7 @@ class OpExecutor:
 
     async def _exec_bash(self, op, t_start: float) -> CommandResult:
         result = await asyncio.wait_for(
-            self._sandbox.commands.run(op.command),
+            self._sandbox.commands.run(op.command, user=self._user),
             timeout=self._command_timeout,
         )
         return CommandResult(
@@ -462,18 +447,10 @@ class SandboxRunner:
                 detail=f"created in {create_time:.2f}s",
             )
 
-            # ---- remap workspace paths to /testbed
-            ws_prefix = _detect_workspace_prefix(ops)
-            if ws_prefix:
-                logger.info(
-                    "[%s] Remapping paths: %s -> /testbed",
-                    instance_id, ws_prefix,
-                )
-                _remap_op_paths(ops, ws_prefix, "/testbed")
-
             # ---- replay ops
             total_ops = len(ops)
             executor = OpExecutor(sandbox, self._cfg.command_timeout)
+            executor._user = "root"  # OpenHands trajectories run as root
             for idx, op in enumerate(ops, 1):
                 # cooperative shutdown check
                 if self._shutdown_event.is_set():
@@ -502,9 +479,12 @@ class SandboxRunner:
             # ---- extract actual patch via git diff
             if self._cfg.extract_patch and not self._shutdown_event.is_set():
                 try:
+                    # Find the repo dir from ops (workspace path) or fall back
+                    repo_dir = _detect_workspace_prefix(ops) or "/testbed"
                     diff_result = await asyncio.wait_for(
                         sandbox.commands.run(
-                            "cd /testbed && git add -A && git diff --cached HEAD"
+                            f"cd {repo_dir} && git add -A && git diff --cached HEAD",
+                            user="root",
                         ),
                         timeout=30,
                     )

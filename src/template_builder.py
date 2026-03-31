@@ -163,6 +163,8 @@ def generate_dockerfile(
     if install:
         lines += [f"RUN {act}{install}", ""]
     lines.append("RUN git diff --name-only | xargs -r git checkout --")
+    # Ensure non-root users (e.g. E2B sandbox default 'user') can access the repo
+    lines.append(f"RUN chmod -R a+rwX /{ENV}")
     return "\n".join(lines)
 
 

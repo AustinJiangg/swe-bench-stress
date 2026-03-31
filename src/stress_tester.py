@@ -299,6 +299,7 @@ class OpExecutor:
     def __init__(self, sandbox, command_timeout: int):
         self._sandbox = sandbox
         self._command_timeout = command_timeout
+        self._user: str | None = None  # set to "root" for OpenHands trajectories
 
     async def execute(self, op) -> CommandResult | None:
         """Dispatch to the appropriate handler based on op_type."""
@@ -340,7 +341,7 @@ class OpExecutor:
 
     async def _exec_bash(self, op, t_start: float) -> CommandResult:
         result = await asyncio.wait_for(
-            self._sandbox.commands.run(op.command),
+            self._sandbox.commands.run(op.command, user=self._user),
             timeout=self._command_timeout,
         )
         return CommandResult(
@@ -474,6 +475,7 @@ class SandboxRunner:
             # ---- replay ops
             total_ops = len(ops)
             executor = OpExecutor(sandbox, self._cfg.command_timeout)
+            executor._user = "root"  # OpenHands trajectories run as root
             for idx, op in enumerate(ops, 1):
                 # cooperative shutdown check
                 if self._shutdown_event.is_set():

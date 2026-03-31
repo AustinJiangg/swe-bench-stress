@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
-from e2b import Template, default_build_logger
+from e2b import Template
 from packaging.version import parse as parse_version
 
 from config import config
@@ -420,6 +420,11 @@ class E2BTemplateBuilder:
             )
 
     def _build_via_sdk(self, image_ref: str, template_name: str) -> str:
+        logger.info(
+            "Building template via SDK: image_ref=%s, template_name=%s, cpu_count=%d, memory_mb=%d",
+            image_ref, template_name, self.cpu_count, self.memory_mb,
+        )
+
         tpl = Template()
         template = tpl.from_image(
             image_ref,
@@ -427,12 +432,16 @@ class E2BTemplateBuilder:
             password=self.registry_password or None,
         )
 
+        def _build_logger(log):
+            line = log.message if hasattr(log, "message") else str(log)
+            print(line, flush=True)
+
         build_info = Template.build(
             template,
             alias=template_name,
             cpu_count=self.cpu_count,
             memory_mb=self.memory_mb,
-            on_build_logs=default_build_logger(),
+            on_build_logs=_build_logger,
         )
 
         template_id = getattr(build_info, "template_id", "")

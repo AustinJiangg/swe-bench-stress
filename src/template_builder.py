@@ -1,11 +1,12 @@
 """
-Build E2B sandbox templates from SWE-rebench install_config.
+Build E2B sandbox templates from SWE-rebench task instances.
 
 Strategy
 --------
-1. Group tasks by (install_config + repo + base_commit) fingerprint.
-2. Generate a Dockerfile for each unique combination.
-3. Build and register templates via the E2B Python SDK or E2B CLI.
+1. One task → one template (no grouping).
+2. Generate a Dockerfile that clones the repo to the same path OpenHands uses:
+   /workspace/{owner}__{repo}__{version}
+3. Build and register via the E2B Python SDK or CLI.
 4. Cache template IDs locally so rebuilds are skipped.
 """
 
@@ -27,7 +28,7 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-ENV = "testbed"
+ENV = "testbed"  # conda env name (unchanged)
 RAW_URL = "https://raw.githubusercontent.com"
 CONDA_TOS = (
     "RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main "
@@ -35,8 +36,20 @@ CONDA_TOS = (
 )
 
 # --------------------------------------------------------------------------- #
-#  Dockerfile generation                                                        #
+#  Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
+
+def workspace_path_for_task(task: dict) -> str:
+    """Return the workspace path OpenHands would use for this task.
+
+    Format: /workspace/{owner}__{repo}__{version}
+    Example: /workspace/PlasmaFAIR__sdf-xarray__unknown
+    """
+    repo = task.get("repo", "")
+    version = task.get("version") or "unknown"
+    repo_slug = repo.replace("/", "__")
+    return f"/workspace/{repo_slug}__{version}"
 
 
 def _printf_file(content: str, dest: str) -> str:
@@ -51,21 +64,24 @@ def _printf_file(content: str, dest: str) -> str:
 
 def _strip_apt_update(cmd: str) -> str:
     """Remove ``apt-get update`` from *cmd* while keeping other chained commands."""
-    # "apt-get update && apt-get install ..." → "apt-get install ..."
     cleaned = re.sub(r"apt-get\s+update\s*&&\s*", "", cmd)
-    # standalone "apt-get update"
     cleaned = re.sub(r"^\s*apt-get\s+update\s*$", "", cleaned)
     return cleaned.strip()
 
 
+# --------------------------------------------------------------------------- #
+#  Dockerfile generation                                                        #
+# --------------------------------------------------------------------------- #
+
+
 def generate_dockerfile(
-    instance: dict[str, Any],
+    task: dict[str, Any],
     base_image: str = "ubuntu:22.04-swe-base",
 ) -> str:
-    specs = {k: v for k, v in (instance.get("install_config") or {}).items() if v is not None}
-    repo = instance["repo"]
-    commit = instance["base_commit"]
-    env_commit = instance.get("environment_setup_commit", commit)
+    specs = {k: v for k, v in (task.get("install_config") or {}).items() if v is not None}
+    repo = task["repo"]
+    commit = task["base_commit"]
+    env_commit = task.get("environment_setup_commit", commit)
     py = str(specs.get("python", "3.9"))
     if parse_version(py) < parse_version("3.6"):
         py = "3.6"
@@ -75,10 +91,13 @@ def generate_dockerfile(
     install = specs.get("install", "")
     env_vars = specs.get("env_vars") or {}
     no_use_env = specs.get("no_use_env", False)
-    env_yml = instance.get("environment", "")
-    reqs = instance.get("requirements", "")
+    env_yml = task.get("environment", "")
+    reqs = task.get("requirements", "")
     reqs_clean = "\n".join(l for l in reqs.splitlines() if l.strip() and not l.strip().startswith("-e "))
     act = "" if no_use_env else f". activate {ENV} && "
+
+    # Workspace path matching OpenHands convention
+    ws_path = workspace_path_for_task(task)
 
     lines = [f"FROM {base_image}", ""]
 
@@ -149,9 +168,10 @@ def generate_dockerfile(
     # ── INSTANCE LAYER ─────────────────────────────────────────
     repo_alt = repo.replace("/", "__")
     lines += [
-        f"RUN git clone https://github.com/{repo}.git /{ENV} 2>/dev/null || "
-        f"git clone https://github.com/SWE-bench-repos/{repo_alt}.git /{ENV}",
-        f"WORKDIR /{ENV}",
+        f"RUN mkdir -p $(dirname {ws_path}) && "
+        f"(git clone https://github.com/{repo}.git {ws_path} 2>/dev/null || "
+        f"git clone https://github.com/SWE-bench-repos/{repo_alt}.git {ws_path})",
+        f"WORKDIR {ws_path}",
         f"RUN git -c advice.detachedHead=false checkout {commit}", "",
     ]
     for cmd in pre_install:
@@ -164,24 +184,17 @@ def generate_dockerfile(
         lines += [f"RUN {act}{install}", ""]
     lines.append("RUN git diff --name-only | xargs -r git checkout --")
     # Ensure non-root users (e.g. E2B sandbox default 'user') can access the repo
-    lines.append(f"RUN chmod -R a+rwX /{ENV}")
+    lines.append(f"RUN chmod -R a+rwX {ws_path}")
     return "\n".join(lines)
 
 
-def fingerprint_install_config(
-    install_config: dict, repo: str = "", base_commit: str = ""
-) -> str:
-    """Return a short hash identifying a (install_config, repo, base_commit) combination."""
-    canonical = json.dumps(
-        {"config": install_config, "repo": repo, "commit": base_commit},
-        sort_keys=True,
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+# --------------------------------------------------------------------------- #
+#  Template cache                                                               #
+# --------------------------------------------------------------------------- #
 
 
 class TemplateCache:
-    """Persist fingerprint → template_id mappings in a JSON file."""
+    """Persist fingerprint -> template_id mappings in a JSON file."""
 
     def __init__(self, cache_file: str = "./data/template_cache.json"):
         self.path = Path(cache_file)
@@ -206,40 +219,13 @@ class TemplateCache:
         self._save()
 
 
-def group_tasks_by_config(tasks: list[dict]) -> dict[str, dict]:
-    """Group tasks by (install_config, repo, base_commit) fingerprint.
-
-    Returns::
-
-        {fingerprint: {"config": {…}, "tasks": [instance_id, …],
-                       "python": "3.x", "repo": "owner/repo",
-                       "base_commit": "abc123",
-                       "environment_setup_commit": "...",
-                       "environment": "...", "requirements": "..."}}
-    """
-    groups: dict[str, dict] = {}
-    for task in tasks:
-        ic = task.get("install_config") or {}
-        repo = task.get("repo", "")
-        base_commit = task.get("base_commit", "")
-        fp = fingerprint_install_config(ic, repo, base_commit)
-        if fp not in groups:
-            groups[fp] = {
-                "config": ic,
-                "tasks": [],
-                "python": str(ic.get("python", "")),
-                "repo": repo,
-                "base_commit": base_commit,
-                "environment_setup_commit": task.get("environment_setup_commit", base_commit),
-                "environment": task.get("environment", ""),
-                "requirements": task.get("requirements", ""),
-            }
-        groups[fp]["tasks"].append(task.get("instance_id", "unknown"))
-    return groups
+# --------------------------------------------------------------------------- #
+#  Template builder                                                             #
+# --------------------------------------------------------------------------- #
 
 
 class E2BTemplateBuilder:
-    """Build and register E2B templates from install_config dicts."""
+    """Build and register E2B templates — one per task."""
 
     def __init__(
         self,
@@ -263,43 +249,29 @@ class E2BTemplateBuilder:
         self.docker_registry_url = docker_registry_url
         self.docker_registry_repo = docker_registry_repo
 
-    def _make_instance(self, group: dict) -> dict[str, Any]:
-        """Build the instance dict that generate_dockerfile expects from a group entry."""
-        return {
-            "install_config": group["config"],
-            "repo": group["repo"],
-            "base_commit": group["base_commit"],
-            "environment_setup_commit": group.get("environment_setup_commit", group["base_commit"]),
-            "environment": group.get("environment", ""),
-            "requirements": group.get("requirements", ""),
-        }
-
     @staticmethod
-    def _make_image_name(name_prefix: str, repo: str, fp: str) -> str:
-        """Build a descriptive Docker image name from repo and fingerprint.
+    def _make_image_name(name_prefix: str, instance_id: str) -> str:
+        """Build a Docker image name from the instance_id.
 
-        Example: ``swe-django__django-976d053c`` (prefix-repo-fingerprint8).
+        Example: ``swe-plasmaFAIR__sdf-xarray-24``
         """
-        if repo:
-            repo_slug = repo.replace("/", "__").replace(".", "-").lower()
-            return f"{name_prefix}-{repo_slug}-{fp[:8]}"
-        return f"{name_prefix}-{fp}"
+        slug = instance_id.replace("/", "__").replace(".", "-").lower()
+        # Docker image names have a max length; truncate if needed
+        return f"{name_prefix}-{slug}"[:128]
 
-    def get_or_build(self, group: dict, name_prefix: str = "swe") -> str:
-        # Generate Dockerfile first so we can fingerprint the actual build content.
-        # This ensures any config change (base_image, proxy, etc.) invalidates the cache.
-        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
+    def get_or_build(self, task: dict, name_prefix: str = "swe") -> str:
+        """Build a template for a single task, returning the template_id."""
+        instance_id = task.get("instance_id", "unknown")
+        dockerfile = generate_dockerfile(task, self.base_image)
         fp = hashlib.sha256(dockerfile.encode()).hexdigest()[:16]
 
         cached = self.cache.get(fp)
         if cached:
-            logger.info("Template cache hit: %s -> %s", fp, cached)
+            logger.info("Template cache hit: %s (%s) -> %s", instance_id, fp, cached)
             return cached
 
-        # Use repo-based prefix for a readable image name
-        repo_fp = fingerprint_install_config(group["config"], group["repo"], group["base_commit"])
-        template_name = self._make_image_name(name_prefix, group["repo"], repo_fp)
-        logger.info("Building new template: %s (dockerfile fingerprint: %s)", template_name, fp)
+        template_name = self._make_image_name(name_prefix, instance_id)
+        logger.info("Building template for %s: %s (fingerprint: %s)", instance_id, template_name, fp)
 
         # Step 1: Build Docker image and push to private registry
         image_ref = self._build_and_push_image(dockerfile, template_name)
@@ -311,25 +283,22 @@ class E2BTemplateBuilder:
             template_id = self._build_via_sdk(image_ref, template_name)
 
         self.cache.set(fp, template_id)
-        logger.info("Template built: %s -> %s", template_name, template_id)
+        logger.info("Template built: %s -> %s", instance_id, template_id)
         return template_id
 
     def get_or_build_batch(self, tasks: list[dict], name_prefix: str = "swe") -> dict[str, str]:
-        groups = group_tasks_by_config(tasks)
-        logger.info(
-            "Grouped %d tasks into %d unique configs",
-            len(tasks), len(groups),
-        )
+        """Build one template per task. Returns {instance_id: template_id}."""
+        logger.info("Building templates for %d tasks", len(tasks))
 
         result: dict[str, str] = {}
-        for fp, group in groups.items():
+        for task in tasks:
+            iid = task.get("instance_id", "unknown")
             try:
-                tid = self.get_or_build(group, name_prefix)
+                tid = self.get_or_build(task, name_prefix)
             except Exception as exc:
-                logger.warning("Failed to build template for %s: %s", fp, exc)
+                logger.warning("Failed to build template for %s: %s", iid, exc)
                 tid = ""
-            for iid in group["tasks"]:
-                result[iid] = tid
+            result[iid] = tid
 
         return result
 
@@ -338,7 +307,6 @@ class E2BTemplateBuilder:
 
         Returns the full image reference (e.g. ``registry:5000/e2b/swe-django__django-abc123:latest``).
         """
-        # Build local image with short name, then tag with full registry path for push
         local_tag = f"{image_name}:latest"
         image_ref = f"{self.docker_registry_url}/{self.docker_registry_repo}/{image_name}:latest"
         logger.info("Building Docker image: %s", image_ref)
@@ -347,7 +315,6 @@ class E2BTemplateBuilder:
             df_path = Path(tmpdir) / "Dockerfile"
             df_path.write_text(dockerfile)
 
-            # Build with local tag
             build_cmd = ["docker", "build", "-t", local_tag, "-f", str(df_path), tmpdir]
             logger.info("Running: %s", " ".join(build_cmd))
             proc = subprocess.Popen(
@@ -406,7 +373,6 @@ class E2BTemplateBuilder:
 
     def _build_via_cli(self, image_ref: str, template_name: str) -> str:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a minimal Dockerfile that pulls from the pre-built image
             df_path = Path(tmpdir) / "e2b.Dockerfile"
             df_path.write_text(f"FROM {image_ref}\n")
 
@@ -449,10 +415,6 @@ class E2BTemplateBuilder:
             )
 
     def _build_via_sdk(self, image_ref: str, template_name: str) -> str:
-        # Use from_image() to properly pass registry credentials alongside the
-        # image reference.  The previous from_dockerfile("FROM <ref>") approach
-        # did not propagate credentials, causing E2B's server to fail with
-        # "invalid UUID length: 0" when trying to resolve the private image.
         tpl = Template()
         template = tpl.from_image(
             image_ref,
@@ -472,11 +434,3 @@ class E2BTemplateBuilder:
         if not template_id:
             raise RuntimeError(f"No template_id in SDK response: {build_info}")
         return template_id
-
-    def export_dockerfile(self, group: dict, output_path: str) -> str:
-        dockerfile = generate_dockerfile(self._make_instance(group), self.base_image)
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(dockerfile)
-        logger.info("Dockerfile written to %s", path)
-        return str(path)

@@ -204,9 +204,8 @@ def _now_iso() -> str:
 #  Workspace path detection                                                     #
 # --------------------------------------------------------------------------- #
 
-# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths,
-# but E2B templates clone repos into /testbed.  We detect the workspace prefix
-# and create a symlink so all ops work with their original paths.
+# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths.
+# Used to locate the git repo for patch extraction after replay.
 _WORKSPACE_RE = re.compile(r"/workspace/[A-Za-z0-9_.~-]+__[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)?")
 
 
@@ -448,18 +447,6 @@ class SandboxRunner:
                 detail=f"created in {create_time:.2f}s",
             )
 
-            # ---- symlink workspace path to /testbed so ops work as-is
-            ws_prefix = _detect_workspace_prefix(ops)
-            if ws_prefix:
-                logger.info(
-                    "[%s] Creating symlink: %s -> /testbed",
-                    instance_id, ws_prefix,
-                )
-                await sandbox.commands.run(
-                    f"mkdir -p $(dirname {ws_prefix}) && ln -s /testbed {ws_prefix}",
-                    user="root",
-                )
-
             # ---- replay ops
             total_ops = len(ops)
             executor = OpExecutor(sandbox, self._cfg.command_timeout)
@@ -492,9 +479,11 @@ class SandboxRunner:
             # ---- extract actual patch via git diff
             if self._cfg.extract_patch and not self._shutdown_event.is_set():
                 try:
+                    # Find the repo dir from ops (workspace path) or fall back
+                    repo_dir = _detect_workspace_prefix(ops) or "/testbed"
                     diff_result = await asyncio.wait_for(
                         sandbox.commands.run(
-                            "cd /testbed && git add -A && git diff --cached HEAD",
+                            f"cd {repo_dir} && git add -A && git diff --cached HEAD",
                             user="root",
                         ),
                         timeout=30,

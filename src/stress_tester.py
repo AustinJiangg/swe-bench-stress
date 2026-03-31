@@ -32,6 +32,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import re
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -196,6 +198,43 @@ def _percentiles(data: list[float]) -> dict[str, float]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# --------------------------------------------------------------------------- #
+#  Path remapping                                                               #
+# --------------------------------------------------------------------------- #
+
+# OpenHands trajectories use /workspace/{owner}__{repo}__{version}/ paths,
+# but E2B templates clone repos into /testbed.  We detect the workspace prefix
+# from the operations and rewrite it to /testbed.
+_WORKSPACE_RE = re.compile(r"/workspace/[A-Za-z0-9_.~-]+__[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)?")
+
+
+def _detect_workspace_prefix(ops) -> str | None:
+    """Scan ops for the first /workspace/{slug} path and return it."""
+    for op in ops:
+        for field in (op.path, op.command):
+            if not field:
+                continue
+            m = _WORKSPACE_RE.search(field)
+            if m:
+                return m.group(0)
+    return None
+
+
+def _remap_op_paths(ops, src_prefix: str, dst_prefix: str = "/testbed"):
+    """Rewrite *src_prefix* → *dst_prefix* in every op's path and command fields."""
+    for op in ops:
+        if op.path:
+            op.path = op.path.replace(src_prefix, dst_prefix)
+        if op.command:
+            op.command = op.command.replace(src_prefix, dst_prefix)
+        if op.old_str:
+            op.old_str = op.old_str.replace(src_prefix, dst_prefix)
+        if op.new_str:
+            op.new_str = op.new_str.replace(src_prefix, dst_prefix)
+        if op.content:
+            op.content = op.content.replace(src_prefix, dst_prefix)
 
 
 def _categorize_error(error: str) -> str:
@@ -423,15 +462,37 @@ class SandboxRunner:
                 detail=f"created in {create_time:.2f}s",
             )
 
+            # ---- remap workspace paths to /testbed
+            ws_prefix = _detect_workspace_prefix(ops)
+            if ws_prefix:
+                logger.info(
+                    "[%s] Remapping paths: %s -> /testbed",
+                    instance_id, ws_prefix,
+                )
+                _remap_op_paths(ops, ws_prefix, "/testbed")
+
             # ---- replay ops
+            total_ops = len(ops)
             executor = OpExecutor(sandbox, self._cfg.command_timeout)
-            for op in ops:
+            for idx, op in enumerate(ops, 1):
                 # cooperative shutdown check
                 if self._shutdown_event.is_set():
                     break
+                if self._cfg.verbose_ops:
+                    logger.info(
+                        "[%s] op %d/%d  %s",
+                        instance_id, idx, total_ops, op,
+                    )
                 cmd_result = await executor.execute(op)
                 if cmd_result is not None:
                     commands.append(cmd_result)
+                    if self._cfg.verbose_ops:
+                        status = "OK" if (not cmd_result.error and cmd_result.exit_code == 0) else "FAIL"
+                        logger.info(
+                            "[%s] op %d/%d  %s  exit=%d  %.2fs",
+                            instance_id, idx, total_ops, status,
+                            cmd_result.exit_code, cmd_result.duration_s,
+                        )
                     if cmd_result.error:
                         logger.warning(
                             "Command error in sandbox %s: %s",
@@ -564,6 +625,7 @@ class StressTestConfig:
     extract_patch: bool = True          # run git diff after replay to capture changes
     ramp_up_delay_s: float = 0.0        # minimum seconds between sandbox launches
     results_dir: str = "./results"
+    verbose_ops: bool = False            # log each op as it executes (useful for debugging)
 
 
 def _patch_sandbox_protocol():

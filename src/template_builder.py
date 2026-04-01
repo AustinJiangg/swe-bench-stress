@@ -264,6 +264,16 @@ class E2BTemplateBuilder:
         # Docker image names have a max length; truncate if needed
         return f"{name_prefix}-{slug}"[:128]
 
+    @staticmethod
+    def _make_template_name(name_prefix: str, instance_id: str) -> str:
+        """Build an E2B template name (alias) from the instance_id.
+
+        Must match the validation in infra/packages/shared/pkg/id/id.go
+        (``CleanEnvID``): only ``[a-z0-9-_]`` are allowed.
+        """
+        slug = re.sub(r"[^a-z0-9_-]", "-", instance_id.lower())
+        return f"{name_prefix}-{slug}"[:128]
+
     def get_or_build(self, task: dict, name_prefix: str = "swe") -> str:
         """Build a template for a single task, returning the template_id."""
         instance_id = task.get("instance_id", "unknown")
@@ -275,11 +285,13 @@ class E2BTemplateBuilder:
             logger.info("Template cache hit: %s (%s) -> %s", instance_id, fp, cached)
             return cached
 
-        template_name = self._make_image_name(name_prefix, instance_id)
-        logger.info("Building template for %s: %s (fingerprint: %s)", instance_id, template_name, fp)
+        image_name = self._make_image_name(name_prefix, instance_id)
+        template_name = self._make_template_name(name_prefix, instance_id)
+        logger.info("Building template for %s: image=%s, template=%s (fingerprint: %s)",
+                     instance_id, image_name, template_name, fp)
 
         # Step 1: Build Docker image and push to private registry
-        image_ref = self._build_and_push_image(dockerfile, template_name)
+        image_ref = self._build_and_push_image(dockerfile, image_name)
 
         # Step 2: Create E2B template from the pushed image
         if self.strategy == "cli":
